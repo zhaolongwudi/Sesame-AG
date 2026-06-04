@@ -1,0 +1,23 @@
+name: Sesame-AG Dev自动打包
+on:
+  push:
+    branches: [ dev ]
+  workflow_dispatch:
+jobs:
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 配置Java环境
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Windows编译打包
+        run: ./gradlew assembleRelease
+      - name: 上传APK产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dev-APK安装包
+          path: app/build/outputs/apk/release/*.apk
+
