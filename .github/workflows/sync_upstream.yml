@@ -1,0 +1,32 @@
+name: 每日同步原作者源码
+on:
+  # 定时：北京时间每日凌晨2点自动拉取更新
+  schedule:
+    - cron: '0 18 * * *'
+  # 支持手动一键触发同步
+  workflow_dispatch:
+jobs:
+  sync-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 配置Git用户信息
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+      - name: 绑定原作者上游仓库
+        run: |
+          git remote add upstream https://github.com/Sesame-AG/Sesame-AG.git
+          git fetch upstream
+      - name: 同步main分支
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit
+          git push origin main
+      - name: 同步dev分支（关键）
+        run: |
+          git checkout dev
+          git merge upstream/dev --no-edit
+          git push origin dev
