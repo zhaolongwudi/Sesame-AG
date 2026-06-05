@@ -2,6 +2,7 @@ package io.github.aoguai.sesameag.task.antForest
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.core.type.TypeReference
+import io.github.aoguai.sesameag.hook.AccountSessionCoordinator
 import io.github.aoguai.sesameag.util.DataStore
 import io.github.aoguai.sesameag.util.FriendGuard
 import io.github.aoguai.sesameag.util.Log
@@ -30,6 +31,7 @@ data class WaitingTaskPersistData(
     val maxRetries: Int = 3,
     val shieldEndTime: Long = 0L,
     val bombEndTime: Long = 0L,
+    val sessionEpoch: Long = 0L,
     val savedTime: Long = System.currentTimeMillis() // 保存时间，用于判断是否过期
 ) {
     /**
@@ -42,6 +44,7 @@ data class WaitingTaskPersistData(
             bubbleId = bubbleId,
             produceTime = produceTime,
             fromTag = fromTag,
+            sessionEpoch = sessionEpoch,
             retryCount = retryCount,
             maxRetries = maxRetries,
             shieldEndTime = shieldEndTime,
@@ -60,6 +63,7 @@ data class WaitingTaskPersistData(
                 bubbleId = task.bubbleId,
                 produceTime = task.produceTime,
                 fromTag = task.fromTag,
+                sessionEpoch = task.sessionEpoch,
                 retryCount = task.retryCount,
                 maxRetries = task.maxRetries,
                 shieldEndTime = task.shieldEndTime,
@@ -97,7 +101,7 @@ object EnergyWaitingPersistence {
      * @return 包含当前用户 uid 的存储键，如果 uid 为空则使用默认键
      */
     private fun getDataStoreKey(): String {
-        val currentUid = UserMap.currentUid
+        val currentUid = AccountSessionCoordinator.currentUserId() ?: UserMap.currentUid
         return if (currentUid.isNullOrEmpty()) {
             "energy_waiting_tasks_default"
         } else {
@@ -154,6 +158,8 @@ object EnergyWaitingPersistence {
      */
     fun loadTasks(): List<EnergyWaitingManager.WaitingTask> {
         return try {
+            val activeSession = AccountSessionCoordinator.currentSession()
+                ?: return emptyList()
             val dataStoreKey = getDataStoreKey()
             val typeRef = object : TypeReference<List<WaitingTaskPersistData>>() {}
             val persistDataList = DataStore.getOrCreate(dataStoreKey, typeRef)
@@ -168,8 +174,14 @@ object EnergyWaitingPersistence {
             val validTasks = mutableListOf<EnergyWaitingManager.WaitingTask>()
             var expiredCount = 0
             var tooOldCount = 0
+            var staleSessionCount = 0
 
             persistDataList.forEach { persistData ->
+                if (persistData.sessionEpoch <= 0L || persistData.sessionEpoch != activeSession.sessionEpoch) {
+                    staleSessionCount++
+                    return@forEach
+                }
+
                 // 检查1：任务保存时间是否过久
                 val taskAge = currentTime - persistData.savedTime
                 if (taskAge > MAX_TASK_AGE_MS) {
@@ -189,7 +201,9 @@ object EnergyWaitingPersistence {
                 validTasks.add(persistData.toWaitingTask())
             }
 
-            Log.forest("📥 从持久化存储恢复${validTasks.size}个有效任务（跳过${expiredCount}个过期，${tooOldCount}个过旧）")
+            Log.forest(
+                "📥 从持久化存储恢复${validTasks.size}个有效任务（跳过${expiredCount}个过期，${tooOldCount}个过旧，${staleSessionCount}个过期会话）"
+            )
             lastPersistedTaskCount.set(validTasks.size)
 
             validTasks

@@ -3,6 +3,7 @@ package io.github.aoguai.sesameag.hook
 import android.content.Context
 import android.content.Intent
 import io.github.aoguai.sesameag.data.General
+import io.github.aoguai.sesameag.hook.AccountSessionCoordinator
 import io.github.aoguai.sesameag.hook.keepalive.UnifiedScheduler
 import io.github.aoguai.sesameag.hook.keepalive.PersistentScheduleDefaults
 import io.github.aoguai.sesameag.hook.keepalive.PersistentScheduleKind
@@ -69,6 +70,7 @@ internal object ApplicationBroadcastDispatcher {
 
     private fun handleExecuteBroadcast(context: Context?, intent: Intent) {
         val safeIntent = Intent(intent)
+        val appContext = context?.applicationContext ?: context ?: ApplicationHook.appContext
         val isAlarmTriggered = safeIntent.getBooleanExtra("alarm_triggered", false)
         val wakenAtTime = safeIntent.getBooleanExtra("waken_at_time", false)
         val wakenTime = safeIntent.getStringExtra("waken_time")?.trim().takeIf { !it.isNullOrBlank() }
@@ -80,6 +82,16 @@ internal object ApplicationBroadcastDispatcher {
             ?.let { PersistentScheduleRegistry.get(it) }
         if (persistentScheduleId.isNotBlank() && persistentSchedule == null) {
             record(TAG, "忽略不存在的持久执行广播: $persistentScheduleId")
+            return
+        }
+        val currentSession = AccountSessionCoordinator.currentSession()
+        if (persistentSchedule != null && currentSession == null) {
+            record(TAG, "持久执行广播收到但当前会话未就绪，保留调度等待恢复: ${persistentSchedule.name}")
+            return
+        }
+        if (persistentSchedule != null && !AccountSessionCoordinator.isScheduleRoutable(persistentSchedule)) {
+            PersistentScheduleRegistry.markFired(appContext, persistentSchedule.id)
+            record(TAG, "持久执行广播会话不匹配，已丢弃调度: ${persistentSchedule.name}")
             return
         }
         if (persistentSchedule != null && persistentSchedule.state != PersistentScheduleState.SCHEDULED) {
@@ -132,7 +144,9 @@ internal object ApplicationBroadcastDispatcher {
             wakenTime = normalizedWakenTime,
             reason = "broadcast_execute",
             dedupeKey = triggerDedupeKey,
-            persistentScheduleId = persistentScheduleId.takeIf { it.isNotBlank() }
+            persistentScheduleId = persistentScheduleId.takeIf { it.isNotBlank() },
+            ownerUserId = persistentSchedule?.ownerUserId,
+            sessionEpoch = persistentSchedule?.sessionEpoch ?: 0L
         )
 
         ApplicationHookConstants.submitEntry("broadcast_execute") {
@@ -163,6 +177,16 @@ internal object ApplicationBroadcastDispatcher {
             record(TAG, "忽略不存在的持久预唤醒广播: $persistentScheduleId")
             return
         }
+        val currentSession = AccountSessionCoordinator.currentSession()
+        if (persistentSchedule != null && currentSession == null) {
+            record(TAG, "持久预唤醒广播收到但当前会话未就绪，保留调度等待恢复: ${persistentSchedule.name}")
+            return
+        }
+        if (persistentSchedule != null && !AccountSessionCoordinator.isScheduleRoutable(persistentSchedule)) {
+            PersistentScheduleRegistry.markFired(ctx, persistentSchedule.id)
+            record(TAG, "持久预唤醒广播会话不匹配，已丢弃调度: ${persistentSchedule.name}")
+            return
+        }
         if (persistentSchedule != null && persistentSchedule.state != PersistentScheduleState.SCHEDULED) {
             record(TAG, "忽略已处理的持久预唤醒广播: ${persistentSchedule.name}")
             return
@@ -183,7 +207,9 @@ internal object ApplicationBroadcastDispatcher {
             alarmTriggered = true,
             reason = if (executionTimeMillis > 0) "prewakeup_to_${TimeUtil.getCommonDate(executionTimeMillis)}" else "prewakeup",
             dedupeKey = if (executionTimeMillis > 0) "prewakeup_$executionTimeMillis" else "prewakeup",
-            persistentScheduleId = persistentScheduleId.takeIf { it.isNotBlank() }
+            persistentScheduleId = persistentScheduleId.takeIf { it.isNotBlank() },
+            ownerUserId = persistentSchedule?.ownerUserId,
+            sessionEpoch = persistentSchedule?.sessionEpoch ?: 0L
         )
 
         UnifiedScheduler.initialize(ctx)
@@ -195,7 +221,9 @@ internal object ApplicationBroadcastDispatcher {
                 triggerAtMs = execTime,
                 dedupeKey = "prewakeup_$execTime",
                 payloadJson = """{"execution_time":$execTime,"launch_target":true}""",
-                toleranceMs = PersistentScheduleDefaults.DEFAULT_TOLERANCE_MS
+                toleranceMs = PersistentScheduleDefaults.DEFAULT_TOLERANCE_MS,
+                ownerUserId = persistentSchedule?.ownerUserId ?: AccountSessionCoordinator.currentUserId(),
+                sessionEpoch = persistentSchedule?.sessionEpoch ?: AccountSessionCoordinator.currentSessionEpoch()
             )
             if (schedule.lastError != null) {
                 val delayMillis = execTime - now
