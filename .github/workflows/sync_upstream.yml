@@ -1,30 +1,46 @@
 name: 每日同步原作者源码
 on:
-  # 定时：北京时间每日凌晨2点自动拉取更新
+  # 北京时间每日凌晨2点自动拉取更新
   schedule:
     - cron: '0 18 * * *'
   # 支持手动一键触发同步
   workflow_dispatch:
+
 jobs:
   sync-code:
     runs-on: ubuntu-latest
+    # 修复Node.js 20弃用警告
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    # 核心：赋予仓库读写权限，彻底解决 Git 128 错误
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 配置Git用户信息
         run: |
           git config --global user.name "${{ github.actor }}"
           git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+          git config --global core.autocrlf false
+
       - name: 绑定原作者上游仓库
         run: |
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/Sesame-AG/Sesame-AG.git
           git fetch upstream
+
       - name: 同步main分支
         run: |
           git checkout main
           git merge upstream/main --no-edit
           git push origin main
+
       - name: 同步dev分支（关键）
         run: |
           git checkout dev
