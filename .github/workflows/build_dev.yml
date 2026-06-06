@@ -17,7 +17,7 @@ jobs:
       # 配置 Java 编译选项
       JAVA_HOME: /usr/lib/jvm/default-java
     permissions:
-      contents: write # 给 Git 操作赋予读写权限，解决 128 错误
+      contents: write # 给 Git 操作赋予读写权限
       packages: read
       statuses: write
 
@@ -28,13 +28,14 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global core.autocrlf false
 
-      - name: 拉取仓库代码（完整权限配置，解决 checkout 相关 128 错误）
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: 0 # 完整拉取历史，避免浅克隆导致的合并失败
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
+          submodules: false
 
       - name: 设置 JDK 17（适配 Android 编译）
         uses: actions/setup-java@v4
@@ -59,9 +60,9 @@ jobs:
       - name: 构建 APK（Release 包）
         run: ./gradlew assembleRelease
 
-      - name: 上传构建产物（适配 Node.js 24 的最新 upload-artifact）
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: Sesame-AG-Release-APK
           path: app/build/outputs/apk/release/
-          retention-days: 30 # 产物保留 30 天
+          retention-days: 30
