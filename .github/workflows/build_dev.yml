@@ -1,22 +1,67 @@
-name: Sesame-AG Dev自动打包
+name: Build Sesame-AG APK
+run-name: ${{ github.actor }} is building Sesame-AG APK 🚀
+
 on:
   push:
-    branches: [ dev ]
-  workflow_dispatch:
+    branches: [ "Sesame-AG", "main", "dev" ]
+  pull_request:
+    branches: [ "Sesame-AG", "main", "dev" ]
+  workflow_dispatch: # 支持手动触发构建
+
 jobs:
   build_apk:
     runs-on: ubuntu-latest
+    env:
+      # 强制使用 Node.js 24，解决弃用警告
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # 配置 Java 编译选项
+      JAVA_HOME: /usr/lib/jvm/default-java
+    permissions:
+      contents: write # 给 Git 操作赋予读写权限，解决 128 错误
+      packages: read
+      statuses: write
+
     steps:
-      - uses: actions/checkout@v4
-      - name: 配置JDK17
+      - name: 配置 Git 用户信息（解决合并/提交权限问题）
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global core.autocrlf false
+
+      - name: 拉取仓库代码（完整权限配置，解决 checkout 相关 128 错误）
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # 完整拉取历史，避免浅克隆导致的合并失败
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: 设置 JDK 17（适配 Android 编译）
         uses: actions/setup-java@v4
         with:
           java-version: '17'
-          distribution: temurin
-      - name: Gradle编译APK
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: 配置 Gradle 权限
+        run: chmod +x gradlew
+
+      - name: 缓存 Gradle 依赖（加速构建）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 构建 APK（Release 包）
         run: ./gradlew assembleRelease
-      - name: 保存安装包
+
+      - name: 上传构建产物（适配 Node.js 24 的最新 upload-artifact）
         uses: actions/upload-artifact@v4
         with:
-          name: Dev编译APK
-          path: app/build/outputs/apk/release/*.apk
+          name: Sesame-AG-Release-APK
+          path: app/build/outputs/apk/release/
+          retention-days: 30 # 产物保留 30 天
