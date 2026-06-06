@@ -1,6 +1,6 @@
 name: 每日同步原作者源码
 on:
-  # 北京时间每日凌晨2点自动拉取更新
+  # 定时：北京时间每日凌晨2点自动拉取更新
   schedule:
     - cron: '0 18 * * *'
   # 支持手动一键触发同步
@@ -12,7 +12,7 @@ jobs:
     # 修复Node.js 20弃用警告
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    # 核心：赋予仓库读写权限，彻底解决 Git 128 错误
+    # 赋予仓库读写权限
     permissions:
       contents: write
 
@@ -22,6 +22,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           token: ${{ secrets.GITHUB_TOKEN }}
+          submodules: false
 
       - name: 配置Git用户信息
         run: |
