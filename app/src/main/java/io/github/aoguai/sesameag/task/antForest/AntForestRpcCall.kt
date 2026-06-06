@@ -1014,10 +1014,10 @@ object AntForestRpcCall {
     }
 
     @JvmStatic
-    fun itemList(labelType: String): String {
+    fun itemList(labelType: String, startIndex: Int = 0, pageSize: Int = 10): String {
         return RequestManager.requestString(
             "com.alipay.antiep.itemList",
-            "[{\"extendInfo\":\"{}\",\"labelType\":\"$labelType\",\"pageSize\":20,\"requestType\":\"rpc\",\"sceneCode\":\"ANTFOREST_VITALITY\",\"source\":\"afEntry\",\"startIndex\":0}]"
+            "[{\"extendInfo\":\"{}\",\"fromSpuId\":\"\",\"labelType\":\"$labelType\",\"pageSize\":$pageSize,\"requestType\":\"rpc\",\"sceneCode\":\"ANTFOREST_VITALITY\",\"source\":\"afEntry\",\"startIndex\":$startIndex}]"
         )
     }
 

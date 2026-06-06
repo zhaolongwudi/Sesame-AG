@@ -231,18 +231,24 @@ object EnergyWaitingPersistence {
      * 验证并重新添加恢复的任务
      *
      * @param tasks 恢复的任务列表
+     * @param verifyRemoteHome 是否查询好友主页做远端保护罩校验
      * @param addTaskCallback 添加任务的回调函数
      * @return 实际重新添加的任务数量
      */
     suspend fun validateAndRestoreTasks(
         tasks: List<EnergyWaitingManager.WaitingTask>,
+        verifyRemoteHome: Boolean = true,
         addTaskCallback: suspend (EnergyWaitingManager.WaitingTask) -> Boolean
     ): Int {
         if (tasks.isEmpty()) {
             return 0
         }
 
-        Log.forest("🔄 开始验证${tasks.size}个恢复的蹲点任务...")
+        if (verifyRemoteHome) {
+            Log.forest("🔄 开始验证${tasks.size}个恢复的蹲点任务...")
+        } else {
+            Log.forest("🔄 开始恢复${tasks.size}个蹲点任务：收集能量未开启，跳过好友主页验证")
+        }
 
         var restoredCount = 0
         var skippedCount = 0
@@ -254,7 +260,8 @@ object EnergyWaitingPersistence {
                     val success = addTaskCallback(task)
                     if (success) {
                         restoredCount++
-                        Log.forest("  ⭐️ 恢复[${task.getUserTypeTag()}${task.userName}]球[${task.bubbleId}]：能量${TimeUtil.getCommonDate(task.produceTime)}成熟，到时间直接收取"
+                        val actionText = if (verifyRemoteHome) "到时间直接收取" else "收集能量未开启，暂停等待"
+                        Log.forest("  ⭐️ 恢复[${task.getUserTypeTag()}${task.userName}]球[${task.bubbleId}]：能量${TimeUtil.getCommonDate(task.produceTime)}成熟，$actionText"
                         )
                     } else {
                         skippedCount++
@@ -276,6 +283,17 @@ object EnergyWaitingPersistence {
                     }
                 } else if (FriendGuard.shouldSkipFriend(safeUserId, TAG, "恢复蚂蚁森林蹲点任务")) {
                     skippedCount++
+                    return@forEach
+                }
+
+                if (!verifyRemoteHome) {
+                    val success = addTaskCallback(task)
+                    if (success) {
+                        restoredCount++
+                        Log.forest("  ⏸ 恢复[${task.getUserTypeTag()}${task.userName}]球[${task.bubbleId}]：收集能量未开启，跳过好友主页验证")
+                    } else {
+                        skippedCount++
+                    }
                     return@forEach
                 }
 
