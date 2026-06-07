@@ -16,14 +16,14 @@ jobs:
         uses: actions/checkout@692973e3d9ba618452067d47e2b166e974129cdb
         with:
           fetch-depth: 0
-          submodules: false # 跳过自动拉取，避免配置错误
+          # 这里已经明确改成false，跳过自动拉取子模块
+          submodules: false
 
-      # 手动克隆缺失的子模块，解决找不到url的问题
-      - name: 补全缺失的libxposed子模块
+      # 手动补全缺失的libxposed子模块，解决url找不到的问题
+      - name: 补全缺失子模块
         run: |
           mkdir -p libxposed
           git clone https://github.com/libxposed/api.git libxposed/api
-          # 如果项目还有其他子模块，加在这里就可以，格式一样
       
       - name: 配置JDK17
         uses: actions/setup-java@6a10767861629bd6ca9baec4b309a119ed44d362
