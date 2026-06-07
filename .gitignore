@@ -92,3 +92,7 @@ webui_debug*
 .kotlin/sessions/*
 /serve-debug/whackmole.py
 /serve-debug/user.py
+
+[submodule "libxposed/api"]
+	path = libxposed/api
+	url = https://github.com/libxposed/api.git
