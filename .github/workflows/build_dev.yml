@@ -16,10 +16,8 @@ jobs:
         uses: actions/checkout@692973e3d9ba618452067d47e2b166e974129cdb
         with:
           fetch-depth: 0
-          # 这里已经明确改成false，跳过自动拉取子模块
           submodules: false
 
-      # 手动补全缺失的libxposed子模块，解决url找不到的问题
       - name: 补全缺失子模块
         run: |
           mkdir -p libxposed
