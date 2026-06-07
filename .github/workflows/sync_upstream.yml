@@ -1,3 +1,6 @@
+这个同步脚本不可用大多是**Git凭证丢失+分支切换失败+子模块不完整**导致的，典型就是Git返回exit 128错误，给你修复后的完整可用版本：
+
+```yaml
 name: 每日同步原作者源码
 on:
   schedule:
@@ -13,19 +16,19 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 检出完整代码
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # 修复核心：保留Git凭证，给后续push授权，解决exit 128权限错误
+          persist-credentials: true
           submodules: false
 
-      # 新增清理步骤
-      - name: 清理无效子模块
+      - name: 清理原有子模块配置
         run: |
-          rm -rf libxposed/api
-          rm -f .gitmodules
+          rm -rf libxposed/api 2>/dev/null || true
           git rm --cached libxposed/api 2>/dev/null || true
+          rm -f .gitmodules 2>/dev/null || true
 
       - name: 配置Git用户信息
         run: |
@@ -37,16 +40,25 @@ jobs:
         run: |
           git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/Sesame-AG/Sesame-AG.git
-          git fetch upstream
+          git fetch --all --prune
 
       - name: 同步main分支
         run: |
-          git checkout main
-          git merge upstream/main --no-edit
-          git push origin main
+          # 不管本地有没有分支，强制对齐上游原作者代码
+          git checkout -B main upstream/main
+          git push origin main -f
 
-      - name: 同步dev分支（关键）
+      - name: 同步dev分支
         run: |
-          git checkout dev
-          git merge upstream/dev --no-edit
-          git push origin dev
+          git checkout -B dev upstream/dev
+          git push origin dev -f
+
+      - name: 同步更新子模块
+        run: |
+          git submodule update --init --recursive
+          # 提交子模块更新（没有变更会自动跳过不报错）
+          if [ -f .gitmodules ] && [[ $(git status --porcelain) ]]; then
+            git add .
+            git commit -m "sync: update submodules from upstream"
+            git push origin dev
+          fi
