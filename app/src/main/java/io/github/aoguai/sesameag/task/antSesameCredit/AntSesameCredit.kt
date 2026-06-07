@@ -1449,12 +1449,14 @@ class AntSesameCredit : ModelTask() {
 
             if (finishFlag) continue
 
-            // 使用TaskBlacklist进行黑名单检查
-            if (isTaskInBlacklist(sesameAlchemyTaskBlacklistModule, title)) {
+            val blacklistKeys = listOf(templateId, title).filter { it.isNotBlank() }
+            // 使用TaskBlacklist进行黑名单检查，优先让 templateId 类默认黑名单生效。
+            if (blacklistKeys.any { isTaskInBlacklist(sesameAlchemyTaskBlacklistModule, it) }) {
                 // 只有在所有任务组中未处理过时才记录日志
-                if (!processedBlacklistTasks.contains(title)) {
-                    Log.sesame("跳过黑名单任务: $title")
-                    processedBlacklistTasks.add(title)
+                val blacklistLogKey = title.ifBlank { templateId }
+                if (!processedBlacklistTasks.contains(blacklistLogKey)) {
+                    Log.sesame("跳过黑名单任务: $blacklistLogKey")
+                    processedBlacklistTasks.add(blacklistLogKey)
                 }
                 continue
             }
@@ -1538,7 +1540,14 @@ class AntSesameCredit : ModelTask() {
                     //  Log.error(TAG, "任务提交失败: $title - $errorMsg")
                     // 自动添加到黑名单
                     if (!errorCode.isEmpty()) {
-                        autoBlacklistSesameTaskIfNeeded(sesameAlchemyTaskBlacklistModule, title, errorCode, resultView, "finish")
+                        autoBlacklistSesameTaskIfNeeded(
+                            sesameAlchemyTaskBlacklistModule,
+                            title,
+                            errorCode,
+                            resultView,
+                            "finish",
+                            templateId.ifBlank { title }
+                        )
                     }
                 }
             }
@@ -2795,7 +2804,75 @@ class AntSesameCredit : ModelTask() {
                 "0" == response.optString("errCode") ||
                 "SUCCESS".equals(response.optString("resultCode"), ignoreCase = true) ||
                 "SUCCESS".equals(response.optString("errorCode"), ignoreCase = true) ||
+                hasNestedAdTaskSuccess(response) ||
                 rawResponse.contains("业务自发奖")
+        }
+
+        private fun hasNestedAdTaskSuccess(response: JSONObject): Boolean {
+            val errorStack = response.optJSONObject("errorContext")?.optJSONArray("errorStack") ?: return false
+            for (i in 0 until errorStack.length()) {
+                val errorMsg = errorStack.optJSONObject(i)?.optString("errorMsg").orEmpty()
+                val taskBo = extractNestedTaskBo(errorMsg) ?: continue
+                if (isNestedAdTaskBoSuccess(taskBo)) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private fun extractNestedTaskBo(errorMsg: String): JSONObject? {
+            val marker = "taskBO:"
+            val start = errorMsg.indexOf(marker)
+            if (start < 0) return null
+            val jsonStart = errorMsg.indexOf('{', start + marker.length)
+            if (jsonStart < 0) return null
+            return runCatching {
+                JSONObject(errorMsg.substring(jsonStart))
+            }.getOrNull()
+        }
+
+        private fun isNestedAdTaskBoSuccess(taskBo: JSONObject): Boolean {
+            val taskResult = taskBo.optString("taskResult")
+                .takeIf { it.isNotBlank() }
+                ?.let { runCatching { JSONObject(it) }.getOrNull() }
+                ?: return false
+            if (!taskResult.optBoolean("success", false)) return false
+            val content = taskResult.optJSONObject("content")
+            if (content != null) {
+                if (!content.optBoolean("success", false)) return false
+                if (!isAdTaskOkStatus(content.optString("thirdPartyRetCode"))) return false
+                if (!isAdTaskOkStatus(content.optString("thirdPartyRetMsg"))) return false
+                return true
+            }
+            return hasNestedAdRewardSuccess(taskBo)
+        }
+
+        private fun isAdTaskOkStatus(value: String): Boolean {
+            return value.isBlank() ||
+                value == "0" ||
+                value.equals("OK", ignoreCase = true) ||
+                value.equals("SUCCESS", ignoreCase = true)
+        }
+
+        private fun hasNestedAdRewardSuccess(taskBo: JSONObject): Boolean {
+            val executePointStatus = taskBo.optJSONObject("executePointStatus")
+            val finishStatus = executePointStatus?.optString("UNION_TASK_SLAVE_EVENT_FINISH").orEmpty()
+            val extendInfo = taskBo.optJSONObject("extendInfo")
+            val rewardStatus = extendInfo?.optString("UNION_TASK_SLAVE_EVENT_FINISH_REWARD_STATUS").orEmpty()
+            return finishStatus.equals("SUCCESS", ignoreCase = true) ||
+                rewardStatus.equals("SUCCESS", ignoreCase = true) ||
+                hasUnionTaskRewardSuccess(taskBo)
+        }
+
+        private fun hasUnionTaskRewardSuccess(taskBo: JSONObject): Boolean {
+            val unionTaskInfo = taskBo.optJSONArray("unionTaskInfo") ?: return false
+            for (i in 0 until unionTaskInfo.length()) {
+                val rewardStatus = unionTaskInfo.optJSONObject(i)?.optString("rewardStatus").orEmpty()
+                if (rewardStatus.equals("SUCCESS", ignoreCase = true)) {
+                    return true
+                }
+            }
+            return false
         }
 
         private fun isAdTaskRetryable(response: JSONObject, message: String): Boolean {
@@ -2855,9 +2932,11 @@ class AntSesameCredit : ModelTask() {
             taskTitle: String,
             errorCode: String,
             resultView: String = "",
-            action: String = "task"
+            action: String = "task",
+            taskId: String = taskTitle
         ) {
-            if (taskTitle.isBlank() || (errorCode.isBlank() && resultView.isBlank())) {
+            val normalizedTaskId = taskId.ifBlank { taskTitle }
+            if (normalizedTaskId.isBlank() || (errorCode.isBlank() && resultView.isBlank())) {
                 return
             }
             val code = errorCode.ifBlank { "UNKNOWN" }
@@ -2869,7 +2948,7 @@ class AntSesameCredit : ModelTask() {
                 "adFinish" -> "AntSesameCreditRpcCall.taskFinish"
                 else -> "AntSesameCreditRpcCall.$action"
             }
-            val detail = "module=$moduleName taskId=$taskTitle taskName=$taskTitle action=$action rpc=$rpc " +
+            val detail = "module=$moduleName taskId=$normalizedTaskId taskName=$taskTitle action=$action rpc=$rpc " +
                 "code=$code msg=$message raw=$message"
             when (classifySesameTaskFailure(errorCode, resultView)) {
                 TaskRpcFailureType.TERMINAL_DONE -> {
@@ -2881,12 +2960,12 @@ class AntSesameCredit : ModelTask() {
                 }
 
                 TaskRpcFailureType.UNSUPPORTED_NO_CLOSURE -> {
-                    blacklistClassifiedSesameTask(moduleName, taskTitle, errorCode)
+                    blacklistClassifiedSesameTask(moduleName, normalizedTaskId, taskTitle, errorCode)
                     Log.error(TAG, "$moduleName[$taskTitle] classification=UNSUPPORTED_NO_CLOSURE decision=BLACKLIST reason=未抓到稳定完成RPC $detail")
                 }
 
                 TaskRpcFailureType.NON_RETRYABLE_INVALID -> {
-                    blacklistClassifiedSesameTask(moduleName, taskTitle, errorCode)
+                    blacklistClassifiedSesameTask(moduleName, normalizedTaskId, taskTitle, errorCode)
                     Log.error(TAG, "$moduleName[$taskTitle] classification=NON_RETRYABLE_INVALID decision=BLACKLIST $detail")
                 }
 
@@ -2900,11 +2979,11 @@ class AntSesameCredit : ModelTask() {
             }
         }
 
-        private fun blacklistClassifiedSesameTask(moduleName: String, taskTitle: String, errorCode: String) {
+        private fun blacklistClassifiedSesameTask(moduleName: String, taskId: String, taskTitle: String, errorCode: String) {
             if (errorCode.isNotBlank()) {
-                autoAddToBlacklist(moduleName, taskTitle, taskTitle, errorCode)
+                autoAddToBlacklist(moduleName, taskId, taskTitle, errorCode)
             }
-            TaskBlacklist.addToBlacklist(moduleName, taskTitle, taskTitle)
+            TaskBlacklist.addToBlacklist(moduleName, taskId, taskTitle)
         }
 
         private fun classifySesameTaskFailure(errorCode: String, resultView: String): TaskRpcFailureType {
@@ -2985,7 +3064,8 @@ class AntSesameCredit : ModelTask() {
                     taskTitle,
                     result.code,
                     result.message.ifEmpty { result.raw },
-                    "feedback"
+                    "feedback",
+                    task.optString("templateId").ifBlank { taskTitle }
                 )
             }
             return result.success || result.failureType == TaskRpcFailureType.TERMINAL_DONE

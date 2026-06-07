@@ -355,7 +355,9 @@ object AntForestRpcCall {
             val actualSource = source ?: DEFAULT_SOURCE
             val arg = JSONObject().apply {
                 put("activityParam", JSONObject())
-                put("canRobFlags", "T,F,F,F,F")
+                if (actualFromAct != "TAKE_LOOK" && actualFromAct != "TAKE_LOOK_FRIEND") {
+                    put("canRobFlags", "T,F,F,F,F")
+                }
                 put("configVersionMap", JSONObject().put("wateringBubbleConfig", "0"))
                 put("currentEnergy", 0)
                 put("currentVitalityAmount", 0)

@@ -4741,11 +4741,6 @@ class AntSports : ModelTask() {
                 Log.sports("走路挑战赛线上赛[黑名单跳过]")
                 return
             }
-            if (Status.hasFlagToday(StatusFlags.FLAG_ANTSPORTS_WALK_CHALLENGE_UNAVAILABLE_TODAY)) {
-                Log.sports("走路挑战赛线上赛[今日已停用，跳过重复报名]")
-                return
-            }
-
             val joinedQuery = queryJoinedWalkChallenge()
             if (!joinedQuery.success) {
                 return
@@ -4753,6 +4748,11 @@ class AntSports : ModelTask() {
             var joinedGame = joinedQuery.game
 
             if (joinedGame == null) {
+                if (Status.hasFlagToday(StatusFlags.FLAG_ANTSPORTS_WALK_CHALLENGE_SIGNUP_BLOCKED_TODAY)) {
+                    Log.sports("走路挑战赛线上赛[今日报名不可继续，跳过重复报名]")
+                    return
+                }
+
                 val game = findAvailableWalkChallengeGame()
                 if (game == null) {
                     Log.sports("走路挑战赛线上赛[未找到可报名比赛]")
@@ -4795,7 +4795,7 @@ class AntSports : ModelTask() {
                         errorMsg.contains("系统出错") ||
                         errorMsg.contains("系統出錯")
                     ) {
-                        Status.setFlagToday(StatusFlags.FLAG_ANTSPORTS_WALK_CHALLENGE_UNAVAILABLE_TODAY)
+                        Status.setFlagToday(StatusFlags.FLAG_ANTSPORTS_WALK_CHALLENGE_SIGNUP_BLOCKED_TODAY)
                         Log.sports("走路挑战赛线上赛[暂不可用][code=${errorCode.ifEmpty { "UNKNOWN" }}][msg=$errorMsg] raw=$res"
                         )
                         return
@@ -4810,6 +4810,7 @@ class AntSports : ModelTask() {
             }
 
             if (joinedGame == null) {
+                Status.setFlagToday(StatusFlags.FLAG_ANTSPORTS_WALK_CHALLENGE_SIGNUP_BLOCKED_TODAY)
                 Log.sports("走路挑战赛线上赛[报名状态未确认，跳过今日运动提交]")
                 return
             }
