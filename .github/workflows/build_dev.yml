@@ -5,7 +5,6 @@ on:
     branches: [ dev ]
   workflow_dispatch:
 
-# 提前解决Node.js20废弃警告
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -13,27 +12,33 @@ jobs:
   build_apk:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取项目代码
-        uses: actions/checkout@v5
+      - name: 拉取项目主代码
+        uses: actions/checkout@692973e3d9ba618452067d47e2b166e974129cdb
         with:
-          fetch-depth: 0 # 解决git exit 128错误，拉取完整git历史
-          submodules: true # 拉取项目子模块，本项目依赖子模块必须开启
+          fetch-depth: 0
+          submodules: false # 跳过自动拉取，避免配置错误
+
+      # 手动克隆缺失的子模块，解决找不到url的问题
+      - name: 补全缺失的libxposed子模块
+        run: |
+          mkdir -p libxposed
+          git clone https://github.com/libxposed/api.git libxposed/api
+          # 如果项目还有其他子模块，加在这里就可以，格式一样
       
       - name: 配置JDK17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@6a10767861629bd6ca9baec4b309a119ed44d362
         with:
           java-version: '17'
           distribution: temurin
 
-      - name: 授予Gradle执行权限（避免权限报错）
+      - name: 授予Gradle执行权限
         run: chmod +x ./gradlew
       
       - name: Gradle编译Release APK
         run: ./gradlew assembleRelease
       
       - name: 保存安装包
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@89ef40ab6dcfc1736b20be44070b121fcf117f59
         with:
           name: Sesame-AG-Dev编译APK
-          # 路径正确写在一行，不要再拆分
           path: app/build/outputs/apk/release/*.apk
