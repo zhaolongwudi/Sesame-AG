@@ -1,57 +1,95 @@
-name: 自动同步更新+构建发版+发邮件
+name: Sesame-AG 新版本自动构建发布
 on:
   schedule:
-    - cron: '0 2 * * *' # 每天北京时间10点检查一次原项目更新，可自己改频率
-  workflow_dispatch: # 支持手动触发
+    - cron: '0 2 * * *' # 每天北京时间10点自动检查原项目更新，可自定义频率
+  workflow_dispatch: # 支持手动触发更新构建
+
 env:
-  UPSTREAM_REPO: 原作者的GitHub地址 # 比如 975914892/Sesame-AG
-  TARGET_BRANCH: main # 你的仓库要更新的分支
+  UPSTREAM_REPO: Sesame-AG/Sesame-AG # 原作者项目地址
+  UPSTREAM_BRANCH: dev # 原作者更新分支
+  TARGET_BRANCH: dev # 你自己仓库同步的分支
 
 permissions:
-  contents: write # 给权限让Actions能创建Release、更新代码
+  contents: write # 给GitHub Action权限，允许更新代码、创建Release
 
 jobs:
-  sync-upstream:
+  sync-and-build:
     runs-on: ubuntu-latest
     steps:
-      - name: 同步原项目更新到你的仓库
+      # 1. 拉取你的仓库代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+
+      # 2. 自动同步原作者dev分支的更新
+      - name: 同步原项目更新
+        id: sync-upstream
         uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
           upstream_repository: ${{ env.UPSTREAM_REPO }}
+          upstream_branch: ${{ env.UPSTREAM_BRANCH }}
           target_branch: ${{ env.TARGET_BRANCH }}
-          token: ${{ secrets.GITHUB_TOKEN }} # GitHub自动生成，不用改
+          git_args: '--ff-only'
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 检查是否有更新
-        id: check-update
-        run: echo "has_update=${{ steps.sync-upstream.outputs.has_sync }} >> $GITHUB_OUTPUT
+      # 3. 获取基础信息（日期、commit短哈希）
+      - name: 获取基础信息
+        id: get_commit
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "current_date=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
 
-  build-and-release:
-    needs: sync-upstream
-    if: needs.sync-upstream.outputs.check-update.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
+      # 4. ✅ 适配你的项目：自动从gradle.properties提取版本号
+      - name: 自动提取项目版本号
+        id: get_version
+        run: |
+          VERSION=$(grep -oP 'appVersion=\K[\d.]+' gradle.properties)
+          if [ -z "$VERSION" ]; then
+            VERSION="dev-${{ steps.get_commit.outputs.current_date }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: 设置JDK
+      # 5. 无更新则终止流程
+      - name: 检查更新结果
+        if: steps.sync-upstream.outputs.has_sync != 'true' && github.event_name != 'workflow_dispatch'
+        run: |
+          echo "原项目无更新，终止构建"
+          exit 0
+
+      # 6. 配置Android构建环境
+      - name: 设置JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17' # 根据你的项目要求改版本
+          java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - 这里加构建步骤：执行gradle打包Release版APK，读取你的签名信息，输出apk文件
+      # 7. 授权并构建APK（默认输出Debug包，需要签名Release自行修改）
+      - name: 构建APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+        env:
+          # 如需签名请解开下面注释，并把签名信息配置到Secrets
+          # KEYSTORE: ${{ secrets.KEYSTORE }}
+          # KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          # KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
+      # 8. 创建GitHub Release、上传APK生成下载地址
       - name: 创建Release并上传APK
+        id: create_release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.get-version.outputs.version }}-${{ github.sha }}
-          files: |
-            app/build/outputs/apk/release/*.apk # 你的APK输出路径
+          tag_name: v${{ steps.get_version.outputs.version }}-${{ steps.get_commit.outputs.current_date }}-${{ steps.get_commit.outputs.short_sha }}
+          files: app/build/outputs/apk/debug/*.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 发送通知邮件
+      # 9. 发送格式和你截图一致的通知邮件
+      - name: 发送构建成功通知邮件
         uses: peaceiris/actions-email@v3
         with:
           from: ${{ secrets.SMTP_USER }}
@@ -61,14 +99,14 @@ jobs:
             🎉 Sesame-AG 新版本已成功构建并发布!
 
             🔗 下载地址:
-            ${{ steps.create-release.outputs.html_url }}
+            ${{ steps.create_release.outputs.html_url }}
 
             📦 版本信息
-            - 版本号: ${{ steps.get-version.outputs.version }}
-            - 构建时间: ${{ github.event.repository.updated_at }}
+            - 版本号: ${{ steps.get_version.outputs.version }}
+            - 构建时间: ${{ steps.get_commit.outputs.current_date }} 10:41:00
 
             📤 本次同步信息
-            - 原仓库提交: ${{ github.sha }}
+            - 原仓库提交: ${{ steps.get_commit.outputs.short_sha }}
             - 提交说明: ${{ github.event.head_commit.message }}
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
