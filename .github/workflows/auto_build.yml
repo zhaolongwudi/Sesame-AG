@@ -1,13 +1,14 @@
 name: Sesame-AG 新版本自动构建发布
 on:
   schedule:
-    - cron: '0 2 * * *' # 每天北京时间10点自动检查原项目更新，可自定义频率
+    - cron: '0 18 * * *' # 和你原来保持一致，北京时间每日凌晨2点自动检查更新
   workflow_dispatch: # 支持手动触发更新构建
 
 env:
   UPSTREAM_REPO: Sesame-AG/Sesame-AG # 原作者项目地址
   UPSTREAM_BRANCH: dev # 原作者更新分支
   TARGET_BRANCH: dev # 你自己仓库同步的分支
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # 解决Node警告
 
 permissions:
   contents: write # 给GitHub Action权限，允许更新代码、创建Release
@@ -21,6 +22,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
 
       # 2. 自动同步原作者dev分支的更新
       - name: 同步原项目更新
@@ -57,7 +59,13 @@ jobs:
           echo "原项目无更新，终止构建"
           exit 0
 
-      # 6. 配置Android构建环境
+      # 6. ✅ 新增你原来的步骤：补全缺失的libxposed子模块（打包必须）
+      - name: 补全缺失的libxposed子模块
+        run: |
+          mkdir -p libxposed
+          git clone https://github.com/libxposed/api.git libxposed/api
+
+      # 7. 配置Android构建环境
       - name: 设置JDK 17
         uses: actions/setup-java@v4
         with:
@@ -65,11 +73,11 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 7. 授权并构建APK（默认输出Debug包，需要签名Release自行修改）
-      - name: 构建APK
+      # 8. 授权并构建Release APK
+      - name: 构建Release APK
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
         env:
           # 如需签名请解开下面注释，并把签名信息配置到Secrets
           # KEYSTORE: ${{ secrets.KEYSTORE }}
@@ -77,18 +85,18 @@ jobs:
           # KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           # STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
-      # 8. 创建GitHub Release、上传APK生成下载地址
+      # 9. 创建GitHub Release、上传APK生成下载地址
       - name: 创建Release并上传APK
         id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.get_version.outputs.version }}-${{ steps.get_commit.outputs.current_date }}-${{ steps.get_commit.outputs.short_sha }}
-          files: app/build/outputs/apk/debug/*.apk
+          files: app/build/outputs/apk/release/*.apk
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 9. 发送格式和你截图一致的通知邮件
+      # 10. 发送格式和你截图一致的通知邮件
       - name: 发送构建成功通知邮件
         uses: peaceiris/actions-email@v3
         with:
