@@ -1,0 +1,77 @@
+name: 自动同步更新+构建发版+发邮件
+on:
+  schedule:
+    - cron: '0 2 * * *' # 每天北京时间10点检查一次原项目更新，可自己改频率
+  workflow_dispatch: # 支持手动触发
+env:
+  UPSTREAM_REPO: 原作者的GitHub地址 # 比如 975914892/Sesame-AG
+  TARGET_BRANCH: main # 你的仓库要更新的分支
+
+permissions:
+  contents: write # 给权限让Actions能创建Release、更新代码
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步原项目更新到你的仓库
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+        with:
+          upstream_repository: ${{ env.UPSTREAM_REPO }}
+          target_branch: ${{ env.TARGET_BRANCH }}
+          token: ${{ secrets.GITHUB_TOKEN }} # GitHub自动生成，不用改
+
+      - name: 检查是否有更新
+        id: check-update
+        run: echo "has_update=${{ steps.sync-upstream.outputs.has_sync }} >> $GITHUB_OUTPUT
+
+  build-and-release:
+    needs: sync-upstream
+    if: needs.sync-upstream.outputs.check-update.outputs.has_update == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17' # 根据你的项目要求改版本
+          distribution: 'temurin'
+
+      - 这里加构建步骤：执行gradle打包Release版APK，读取你的签名信息，输出apk文件
+
+      - name: 创建Release并上传APK
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get-version.outputs.version }}-${{ github.sha }}
+          files: |
+            app/build/outputs/apk/release/*.apk # 你的APK输出路径
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 发送通知邮件
+        uses: peaceiris/actions-email@v3
+        with:
+          from: ${{ secrets.SMTP_USER }}
+          to: ${{ secrets.MAIL_TO }}
+          subject: "Sesame-AG 新版本构建发布成功"
+          body: |
+            🎉 Sesame-AG 新版本已成功构建并发布!
+
+            🔗 下载地址:
+            ${{ steps.create-release.outputs.html_url }}
+
+            📦 版本信息
+            - 版本号: ${{ steps.get-version.outputs.version }}
+            - 构建时间: ${{ github.event.repository.updated_at }}
+
+            📤 本次同步信息
+            - 原仓库提交: ${{ github.sha }}
+            - 提交说明: ${{ github.event.head_commit.message }}
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: 465
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
