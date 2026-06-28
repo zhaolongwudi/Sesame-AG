@@ -1,8 +1,8 @@
 name: Sesame-AG 新版本自动构建发布
 on:
   schedule:
-    - cron: '0 18 * * *' # 和你原来保持一致，北京时间每日凌晨2点自动检查更新
-  workflow_dispatch: # 支持手动触发更新构建
+    - cron: 0 18 * * * # 和你原来保持一致，北京时间每日凌晨2点自动检查更新
+  workflow_dispatch: # 支持手动触发更新
 
 env:
   UPSTREAM_REPO: Sesame-AG/Sesame-AG # 原作者项目地址
