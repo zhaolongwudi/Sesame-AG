@@ -78,12 +78,6 @@ jobs:
         run: |
           chmod +x ./gradlew
           ./gradlew assembleRelease
-        env:
-          # 如需签名请解开下面注释，并把签名信息配置到Secrets
-          # KEYSTORE: ${{ secrets.KEYSTORE }}
-          # KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          # KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          # STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
 
       # 9. 创建GitHub Release、上传APK生成下载地址
       - name: 创建Release并上传APK
