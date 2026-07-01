@@ -77,6 +77,14 @@ jobs:
           git log --oneline --no-merges upstream/dev -10 > /tmp/commit_log.txt
           echo "log_file=/tmp/commit_log.txt" >> $GITHUB_OUTPUT
 
+      - name: Collect sync info
+        if: steps.check.outputs.has_changes == 'true'
+        id: sync_info
+        run: |
+          SYNC_TIME=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
+          echo "sync_time=${SYNC_TIME}" >> $GITHUB_OUTPUT
+
       - name: Fetch upstream diff summary
         if: steps.check.outputs.has_changes == 'true'
         run: |
@@ -151,18 +159,17 @@ jobs:
 
       - name: Prepare email script
         if: steps.check.outputs.has_changes == 'true'
-        env:
-          ARTIFACT_ID: ${{ steps.upload_apk.outputs.artifact-id }}
         run: |
           cat > /tmp/send_email.py << 'PYEOF'
-          import smtplib, os, re
+          import smtplib, os, locale
           from email.mime.text import MIMEText
+          from datetime import timezone, timedelta
 
           commit_count = os.environ['COMMIT_COUNT']
           commit_sha = os.environ['COMMIT_SHA']
           build_time = os.environ['BUILD_TIME']
+          sync_time = os.environ.get('SYNC_TIME', build_time)
           workflow_url = os.environ['WORKFLOW_URL']
-          artifact_id = os.environ['ARTIFACT_ID']
 
           run_id = workflow_url.split('/')[-1]
           artifact_name = f'Sesame-AG-APK-{commit_sha}'
@@ -172,25 +179,34 @@ jobs:
               commit_log = f.read().strip()
 
           body = '\n'.join([
-              'Sesame-AG Auto Build Completed',
+              'Sesame-AG 自动构建通知',
+              '========================',
               '',
-              'Build Time: ' + build_time,
-              'New Commits: ' + commit_count,
-              'Latest SHA: ' + commit_sha,
+              '版本号: dev (' + commit_sha + ')',
+              '更新提交: ' + commit_count + ' 条',
               '',
-              '====== Update Log ======',
+              '近10次更新优化:',
+              '----------------------------------------',
               commit_log,
+              '----------------------------------------',
               '',
-              '====== Download APK ======',
+              '构建时间: ' + build_time,
+              '同步时间: ' + sync_time,
+              '',
+              '下载链接:',
               download_url,
               '',
-              'Repository: https://github.com/zhaolongwudi/Sesame-AG/',
+              '同步信息:',
+              '  上游仓库: Sesame-AG/Sesame-AG (dev)',
+              '  目标仓库: zhaolongwudi/Sesame-AG (dev)',
+              '',
+              'GitHub Actions: ' + workflow_url,
           ])
 
           msg = MIMEText(body, 'plain', 'utf-8')
           msg['From'] = os.environ['FROM_EMAIL']
           msg['To'] = os.environ['TO_EMAIL']
-          msg['Subject'] = '[Sesame-AG] New Build - ' + commit_count + ' commits'
+          msg['Subject'] = '[Sesame-AG] 新构建 - ' + commit_count + ' 条提交 - ' + commit_sha
 
           server = smtplib.SMTP_SSL(
               os.environ['SMTP_SERVER'],
@@ -215,6 +231,7 @@ jobs:
           COMMIT_COUNT: ${{ steps.build_info.outputs.commit_count }}
           COMMIT_SHA: ${{ steps.build_info.outputs.commit_sha }}
           BUILD_TIME: ${{ steps.build_info.outputs.build_time }}
+          SYNC_TIME: ${{ steps.sync_info.outputs.sync_time }}
           WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 /tmp/send_email.py
