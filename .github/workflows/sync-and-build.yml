@@ -47,12 +47,14 @@ jobs:
           echo "upstream_head=${UPSTREAM_HEAD}" >> $GITHUB_OUTPUT
           echo "local_head=${LOCAL_HEAD}" >> $GITHUB_OUTPUT
 
-          if [ "$UPSTREAM_HEAD" = "$LOCAL_HEAD" ]; then
+          if git merge-base --is-ancestor ${UPSTREAM_HEAD} ${LOCAL_HEAD} 2>/dev/null; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new upstream commits"
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             NEW_COUNT=$(git rev-list --count ${LOCAL_HEAD}..${UPSTREAM_HEAD})
             echo "commit_count=${NEW_COUNT}" >> $GITHUB_OUTPUT
+            echo "Detected ${NEW_COUNT} new upstream commits"
           fi
 
       - name: Collect upstream commit log
