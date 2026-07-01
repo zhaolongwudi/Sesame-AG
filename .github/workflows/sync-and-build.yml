@@ -144,6 +144,7 @@ jobs:
 
       - name: Upload APK artifact
         if: steps.check.outputs.has_changes == 'true'
+        id: upload_apk
         uses: actions/upload-artifact@v4
         with:
           name: Sesame-AG-APK-${{ steps.build_info.outputs.commit_sha }}
@@ -152,15 +153,22 @@ jobs:
 
       - name: Prepare email script
         if: steps.check.outputs.has_changes == 'true'
+        env:
+          ARTIFACT_ID: ${{ steps.upload_apk.outputs.artifact-id }}
         run: |
           cat > /tmp/send_email.py << 'PYEOF'
-          import smtplib, os
+          import smtplib, os, re
           from email.mime.text import MIMEText
 
           commit_count = os.environ['COMMIT_COUNT']
           commit_sha = os.environ['COMMIT_SHA']
           build_time = os.environ['BUILD_TIME']
           workflow_url = os.environ['WORKFLOW_URL']
+          artifact_id = os.environ['ARTIFACT_ID']
+
+          run_id = workflow_url.split('/')[-1]
+          artifact_name = f'Sesame-AG-APK-{commit_sha}'
+          download_url = f'https://nightly.link/zhaolongwudi/Sesame-AG/actions/runs/{run_id}/{artifact_name}.zip'
 
           with open('/tmp/commit_log.txt') as f:
               commit_log = f.read().strip()
@@ -176,7 +184,7 @@ jobs:
               commit_log,
               '',
               '====== Download APK ======',
-              workflow_url,
+              download_url,
               '',
               'Repository: https://github.com/zhaolongwudi/Sesame-AG/',
           ])
