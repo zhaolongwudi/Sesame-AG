@@ -74,8 +74,15 @@ jobs:
         if: steps.check.outputs.has_changes == 'true'
         id: commit_log
         run: |
-          git log --oneline --no-merges upstream/dev -10 > /tmp/commit_log.txt
+          git log --format="%s" --no-merges upstream/dev -6 > /tmp/commit_log.txt
           echo "log_file=/tmp/commit_log.txt" >> $GITHUB_OUTPUT
+
+      - name: Extract APK version
+        if: steps.check.outputs.has_changes == 'true'
+        id: version
+        run: |
+          APK_VERSION=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
+          echo "apk_version=${APK_VERSION}" >> $GITHUB_OUTPUT
 
       - name: Collect sync info
         if: steps.check.outputs.has_changes == 'true'
@@ -169,6 +176,7 @@ jobs:
           commit_sha = os.environ['COMMIT_SHA']
           build_time = os.environ['BUILD_TIME']
           sync_time = os.environ.get('SYNC_TIME', build_time)
+          apk_version = os.environ.get('APK_VERSION', '0.0.0')
           workflow_url = os.environ['WORKFLOW_URL']
 
           run_id = workflow_url.split('/')[-1]
@@ -182,10 +190,10 @@ jobs:
               'Sesame-AG 自动构建通知',
               '========================',
               '',
-              '版本号: dev (' + commit_sha + ')',
+              '版本号: v' + apk_version + ' (' + commit_sha + ')',
               '更新提交: ' + commit_count + ' 条',
               '',
-              '近10次更新优化:',
+              '近6次更新优化:',
               '----------------------------------------',
               commit_log,
               '----------------------------------------',
@@ -232,6 +240,7 @@ jobs:
           COMMIT_SHA: ${{ steps.build_info.outputs.commit_sha }}
           BUILD_TIME: ${{ steps.build_info.outputs.build_time }}
           SYNC_TIME: ${{ steps.sync_info.outputs.sync_time }}
+          APK_VERSION: ${{ steps.version.outputs.apk_version }}
           WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python3 /tmp/send_email.py
