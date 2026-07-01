@@ -1,0 +1,152 @@
+name: Sync & Build Sesame-AG
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Sesame-AG/Sesame-AG.git || true
+          git fetch upstream dev --quiet
+
+      - name: Check for new commits
+        id: check
+        run: |
+          UPSTREAM_HEAD=$(git rev-parse upstream/dev)
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          echo "upstream_head=${UPSTREAM_HEAD}" >> $GITHUB_OUTPUT
+          echo "local_head=${LOCAL_HEAD}" >> $GITHUB_OUTPUT
+
+          if [ "$UPSTREAM_HEAD" = "$LOCAL_HEAD" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new commits. Upstream: ${UPSTREAM_HEAD:0:8}, Local: ${LOCAL_HEAD:0:8}"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "New commits detected! Upstream: ${UPSTREAM_HEAD:0:8}, Local: ${LOCAL_HEAD:0:8}"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git merge upstream/dev --ff-only -m "sync: merge upstream dev branch [skip ci]"
+
+      - name: Push to target repo
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git push origin dev
+
+      - name: Setup JDK 17
+        if: steps.check.outputs.has_changes == 'true'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        if: steps.check.outputs.has_changes == 'true'
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
+
+      - name: Cache Gradle
+        if: steps.check.outputs.has_changes == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Make gradlew executable
+        if: steps.check.outputs.has_changes == 'true'
+        run: chmod +x ./gradlew
+
+      - name: Build Release APK
+        if: steps.check.outputs.has_changes == 'true'
+        env:
+          CI: 'true'
+        run: |
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Collect build info
+        if: steps.check.outputs.has_changes == 'true'
+        id: build_info
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B origin/dev)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          {
+            echo "commit_msg<<EOF"
+            echo "$COMMIT_MSG"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "build_time=$(date '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Upload APK artifact
+        if: steps.check.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sesame-AG-APK-${{ steps.build_info.outputs.commit_sha }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 30
+
+      - name: Send email notification
+        if: steps.check.outputs.has_changes == 'true' && env.SMTP_SERVER != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: "[Sesame-AG] New Build - ${{ steps.build_info.outputs.commit_sha }}"
+          to: ${{ secrets.TO_EMAIL }}
+          from: ${{ secrets.FROM_EMAIL }}
+          body: |
+            Sesame-AG auto build completed.
+
+            Commit: ${{ steps.build_info.outputs.commit_sha }}
+            Message: ${{ steps.build_info.outputs.commit_msg }}
+            Build Time: ${{ steps.build_info.outputs.build_time }}
+
+            Repository: https://github.com/zhaolongwudi/Sesame-AG/
+            Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          attachments: app/build/outputs/apk/release/*.apk
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.check.outputs.has_changes }}" = "true" ]; then
+            echo "## Build Completed" >> $GITHUB_STEP_SUMMARY
+            echo "- Commit: ${{ steps.build_info.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Time: ${{ steps.build_info.outputs.build_time }}" >> $GITHUB_STEP_SUMMARY
+            echo "- [Download APK](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## No Changes" >> $GITHUB_STEP_SUMMARY
+            echo "Upstream is up to date." >> $GITHUB_STEP_SUMMARY
+          fi
