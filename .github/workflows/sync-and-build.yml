@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force build even if no new upstream commits'
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - dev
@@ -47,7 +53,14 @@ jobs:
           echo "upstream_head=${UPSTREAM_HEAD}" >> $GITHUB_OUTPUT
           echo "local_head=${LOCAL_HEAD}" >> $GITHUB_OUTPUT
 
-          if git merge-base --is-ancestor ${UPSTREAM_HEAD} ${LOCAL_HEAD} 2>/dev/null; then
+          FORCE="${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            NEW_COUNT=$(git rev-list --count ${LOCAL_HEAD}..${UPSTREAM_HEAD})
+            echo "commit_count=${NEW_COUNT}" >> $GITHUB_OUTPUT
+            echo "Force build enabled"
+          elif git merge-base --is-ancestor ${UPSTREAM_HEAD} ${LOCAL_HEAD} 2>/dev/null; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
             echo "No new upstream commits"
           else
