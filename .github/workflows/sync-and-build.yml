@@ -154,11 +154,8 @@ jobs:
         if: steps.check.outputs.has_changes == 'true'
         run: |
           cat > /tmp/send_email.py << 'PYEOF'
-          import smtplib, os, glob
+          import smtplib, os
           from email.mime.text import MIMEText
-          from email.mime.multipart import MIMEMultipart
-          from email.mime.base import MIMEBase
-          from email import encoders
 
           commit_count = os.environ['COMMIT_COUNT']
           commit_sha = os.environ['COMMIT_SHA']
@@ -178,25 +175,16 @@ jobs:
               '====== Update Log ======',
               commit_log,
               '',
-              '====== Download ======',
+              '====== Download APK ======',
+              workflow_url,
+              '',
               'Repository: https://github.com/zhaolongwudi/Sesame-AG/',
-              'Workflow: ' + workflow_url,
           ])
 
-          msg = MIMEMultipart()
+          msg = MIMEText(body, 'plain', 'utf-8')
           msg['From'] = os.environ['FROM_EMAIL']
           msg['To'] = os.environ['TO_EMAIL']
           msg['Subject'] = '[Sesame-AG] New Build - ' + commit_count + ' commits'
-
-          msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
-          for apk in sorted(glob.glob('app/build/outputs/apk/release/*.apk')):
-              with open(apk, 'rb') as f:
-                  part = MIMEBase('application', 'octet-stream')
-                  part.set_payload(f.read())
-                  encoders.encode_base64(part)
-                  part.add_header('Content-Disposition', 'attachment', filename=os.path.basename(apk))
-                  msg.attach(part)
 
           server = smtplib.SMTP_SSL(
               os.environ['SMTP_SERVER'],
@@ -206,7 +194,7 @@ jobs:
           server.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
           server.sendmail(os.environ['FROM_EMAIL'], os.environ['TO_EMAIL'], msg.as_string())
           server.quit()
-          print('Email sent successfully with APK attachments')
+          print('Email sent successfully')
           PYEOF
 
       - name: Send email notification
