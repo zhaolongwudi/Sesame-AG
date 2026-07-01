@@ -74,9 +74,7 @@ jobs:
         if: steps.check.outputs.has_changes == 'true'
         id: commit_log
         run: |
-          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
-          LOCAL_HEAD="${{ steps.check.outputs.local_head }}"
-          git log --oneline --no-merges ${LOCAL_HEAD}..${UPSTREAM_HEAD} > /tmp/commit_log.txt
+          git log --oneline --no-merges upstream/dev -10 > /tmp/commit_log.txt
           echo "log_file=/tmp/commit_log.txt" >> $GITHUB_OUTPUT
 
       - name: Fetch upstream diff summary
