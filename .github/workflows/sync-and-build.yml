@@ -77,22 +77,6 @@ jobs:
           git log --format="%h %s" --no-merges upstream/dev -6 > /tmp/commit_log.txt
           cat /tmp/commit_log.txt
 
-      - name: Extract APK version
-        if: steps.check.outputs.has_changes == 'true'
-        id: version
-        run: |
-          APK_VERSION=$(grep '^appVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
-          echo "apk_version=${APK_VERSION}" >> $GITHUB_OUTPUT
-          echo "App version: ${APK_VERSION}"
-
-      - name: Show upstream diff summary
-        if: steps.check.outputs.has_changes == 'true'
-        run: |
-          LOCAL_HEAD="${{ steps.check.outputs.local_head }}"
-          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
-          echo "=== Files changed ==="
-          git diff --stat ${LOCAL_HEAD}..${UPSTREAM_HEAD} | head -30
-
       - name: Merge upstream changes
         if: steps.check.outputs.has_changes == 'true'
         id: merge
@@ -111,6 +95,14 @@ jobs:
         if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merged == 'true'
         run: |
           git push origin dev
+
+      - name: Extract APK version
+        if: steps.check.outputs.has_changes == 'true'
+        id: version
+        run: |
+          APK_VERSION=$(grep '^appVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          echo "apk_version=${APK_VERSION}" >> $GITHUB_OUTPUT
+          echo "App version: ${APK_VERSION}"
 
       - name: Setup JDK 17
         if: steps.check.outputs.has_changes == 'true'
