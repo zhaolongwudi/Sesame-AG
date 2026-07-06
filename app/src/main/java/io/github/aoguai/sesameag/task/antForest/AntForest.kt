@@ -222,6 +222,10 @@ class AntForest : ModelTask(), EnergyCollectCallback {
     private var showBagList: BooleanModelField? = null
 
     private var vitalityExchangeList: SelectAndCountModelField? = null
+    private var wateringEnabled: BooleanModelField? = null
+    private var waterFriendEnergyFirst: BooleanModelField? = null
+    @Volatile
+    private var preCollectWateringExecutedThisRound: Boolean = false
     private var returnWater33: IntegerModelField? = null
     private var returnWater18: IntegerModelField? = null
     private var returnWater10: IntegerModelField? = null
@@ -387,6 +391,24 @@ class AntForest : ModelTask(), EnergyCollectCallback {
 
     internal fun isTakeLookEnergyEnabled(): Boolean {
         return isCollectEnergyEnabled() && takeLookEnergy?.value != false
+    }
+
+    private fun isForestWateringEnabled(): Boolean {
+        return wateringEnabled?.value != false
+    }
+
+    internal fun shouldRunWaterFriendsBeforeCollect(): Boolean {
+        return isForestWateringEnabled() &&
+            waterFriendEnergyFirst?.value == true &&
+            !preCollectWateringExecutedThisRound
+    }
+
+    internal fun markWaterFriendsBeforeCollectExecuted() {
+        preCollectWateringExecutedThisRound = true
+    }
+
+    internal fun hasWaterFriendsBeforeCollectExecuted(): Boolean {
+        return preCollectWateringExecutedThisRound
     }
 
     private fun hasRebornProtectWorkEnabled(): Boolean {
@@ -639,6 +661,22 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                 false
             ).withDesc("背包没有隐身卡时，允许按“活力值 | 兑换列表”中已勾选且名称命中的项自动补货。需同时开启“活力值 | 开启兑换”。").also {
                 stealthCardConstant = it
+            })
+        modelFields.addField(
+            BooleanModelField(
+                "wateringEnabled",
+                "浇水 | 开启",
+                true
+            ).withDesc("统一控制普通浇水、随机浇水任务、回浇和浇水金球/保护回赠收取；关闭后不影响复活金球与任务领奖。").also {
+                wateringEnabled = it
+            })
+        modelFields.addField(
+            BooleanModelField(
+                "waterFriendEnergyFirst",
+                "浇水 | 每轮收能量前先执行",
+                false
+            ).withDesc("开启后在完整森林流程中先执行好友浇水，再收自己/好友能量；仅影响正常流程，不影响“只收能量”链路。").also {
+                waterFriendEnergyFirst = it
             })
         modelFields.addField(
             IntegerModelField(
@@ -1011,6 +1049,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             GreenLife.resetForestMarketRound()
             if (showBagList?.value == true) showBag()
             initRebornWeeklyState()
+            preCollectWateringExecutedThisRound = false
             // 加载“今日统计”（按账号维度持久化），用于跨重启/多次运行累计
             selfId?.takeIf { it.isNotBlank() }?.let { uid ->
                 Statistics.load(uid)
@@ -1092,6 +1131,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         handledProtectUsers.clear()
         roundPropCheckState = null
         lastUsePropCheckTime = 0L
+        preCollectWateringExecutedThisRound = false
         forestGameCenterRecentAppRecords.clear()
         GreenLife.resetForestMarketRound()
     }
@@ -1212,13 +1252,34 @@ class AntForest : ModelTask(), EnergyCollectCallback {
      * @param wateringBubbles 包含不同类型金球的对象数组
      */
     private fun collectWateringBubbles(wateringBubbles: JSONArray) {
+        val forestWateringEnabled = isForestWateringEnabled()
+        var wateringBubbleSkipLogged = false
+        var returnEnergySkipLogged = false
         for (i in 0..<wateringBubbles.length()) {
             try {
                 val wateringBubble = wateringBubbles.getJSONObject(i)
                 when (val bizType = wateringBubble.getString("bizType")) {
-                    "jiaoshui" -> collectWater(wateringBubble)
+                    "jiaoshui" -> {
+                        if (!forestWateringEnabled) {
+                            if (!wateringBubbleSkipLogged) {
+                                Log.forest("浇水总开关关闭，跳过浇水金球收取")
+                                wateringBubbleSkipLogged = true
+                            }
+                            continue
+                        }
+                        collectWater(wateringBubble)
+                    }
                     "fuhuo" -> collectRebornEnergy()
-                    "baohuhuizeng" -> collectReturnEnergy(wateringBubble)
+                    "baohuhuizeng" -> {
+                        if (!forestWateringEnabled) {
+                            if (!returnEnergySkipLogged) {
+                                Log.forest("浇水总开关关闭，跳过保护回赠收取")
+                                returnEnergySkipLogged = true
+                            }
+                            continue
+                        }
+                        collectReturnEnergy(wateringBubble)
+                    }
                     else -> {
                         Log.forest("未知bizType: $bizType")
                         continue
@@ -1492,6 +1553,10 @@ class AntForest : ModelTask(), EnergyCollectCallback {
      */
     internal fun waterFriends() {
         try {
+            if (!isForestWateringEnabled()) {
+                Log.forest("waterFriends: 浇水总开关关闭，跳过好友浇水")
+                return
+            }
             val taskUid = UserMap.currentUid
             if (taskUid.isNullOrBlank()) {
                 Log.forest("waterFriends: 当前用户为空，跳过浇水")
@@ -3644,7 +3709,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                         val bizNo = userHome.optString("bizNo")
                         if (bizNo.isNotEmpty()) {
                             val returnCount = getReturnCount(collected)
-                            if (returnCount > 0) {
+                            if (returnCount > 0 && isForestWateringEnabled()) {
                                 // ✅ 调用 returnFriendWater 增加通知好友开关
                                 val shouldNotifyFriend = notifyFriend?.value == true
                                 returnFriendWater(userId, bizNo, 1, returnCount, shouldNotifyFriend, selfId)
@@ -5021,6 +5086,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
     private fun completeOneClickWateringTask(item: TaskFlowItem): TaskFlowActionResult {
         val targetResult = queryOneClickWateringTargets(item)
         targetResult.failure?.let { return it }
+        val shouldNotifyFriend = notifyFriend?.value == true
         var wateredCount = 0
         var totalCountByDay: Int? = null
         var firstFailure: TaskFlowActionResult? = null
@@ -5029,7 +5095,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             val maskedName = UserMap.getMaskName(targetUserId)
             val response = AntForestRpcCall.transferEnergyForOneClickWatering(
                 targetUser = targetUserId,
-                notifyFriend = true,
+                notifyFriend = shouldNotifyFriend,
                 orderIndex = index
             )
             if (response.isBlank()) {
@@ -5517,6 +5583,15 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             if (phase != TaskFlowPhase.REWARD_READY && roundCompletedTaskKeys.contains(taskKey)) {
                 if (duplicateSkipLogged.add("$taskKey|completed")) {
                     Log.debug(TAG, "森林任务[${item.title}] 本轮已推进，跳过重复完成探测")
+                }
+                return true
+            }
+            if (item.type == ONE_CLICK_WATERING_TASK_TYPE &&
+                phase == TaskFlowPhase.READY_TO_COMPLETE &&
+                !isForestWateringEnabled()
+            ) {
+                if (duplicateSkipLogged.add("$taskKey|watering-disabled")) {
+                    Log.forest("森林任务[${item.title}] 浇水总开关关闭，跳过自动随机浇水完成")
                 }
                 return true
             }
@@ -7085,12 +7160,15 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                 val response = unwrapResData(JSONObject(AntForestRpcCall.queryAnimalAndPiece(animalId)))
                 var resultCode = response.optString("resultCode")
                 if ("SUCCESS" != resultCode) {
-                    Log.forest("查询失败: " + response.optString("resultDesc"))
+                    Log.forest(
+                        "动物碎片合成查询失败[#${animalId}]: " +
+                            response.optString("resultDesc", response.optString("desc"))
+                    )
                     break
                 }
                 val animalProps = response.optJSONArray("animalProps")
                 if (animalProps == null || animalProps.length() == 0) {
-                    Log.forest("动物属性数据为空")
+                    Log.forest("动物碎片合成查询返回空动物数据[#${animalId}]")
                     break
                 }
                 // 获取第一个动物的属性
@@ -7101,7 +7179,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                 // 获取碎片信息
                 val pieces = animalProp.optJSONArray("pieces")
                 if (pieces == null || pieces.length() == 0) {
-                    Log.forest("碎片数据为空")
+                    Log.forest("动物碎片合成查询缺少碎片数据[$name]")
                     break
                 }
                 var canCombineAnimalPiece = true
@@ -7111,7 +7189,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                     val piece = pieces.optJSONObject(j)
                     if (piece == null || piece.optInt("holdsNum", 0) <= 0) {
                         canCombineAnimalPiece = false
-                        Log.forest("碎片不足，无法合成动物")
+                        Log.forest("动物碎片不足[$name]：无法继续自动合成")
                         break
                     }
                     val propId = piece.optJSONArray("propIdList")?.optString(0)?.takeIf { it.isNotBlank() }
@@ -7135,7 +7213,10 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                         GlobalThreadPools.sleepCompat(100) // 等待一段时间再查询
                         continue
                     } else {
-                        Log.forest("合成失败: " + combineResponse.optString("resultDesc"))
+                        Log.forest(
+                            "动物碎片合成失败[$name]: " +
+                                combineResponse.optString("resultDesc", combineResponse.optString("desc"))
+                        )
                     }
                 }
                 break // 如果不能合成或合成失败，跳出循环
@@ -9211,6 +9292,106 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         }
     }
 
+    private fun queryWaitingTargetHome(task: EnergyWaitingManager.WaitingTask): JSONObject? {
+        val fromAct = if (task.isPkContest()) "PKContest" else "TAKE_LOOK_FRIEND"
+        return if (task.isSelf()) {
+            querySelfHome()
+        } else {
+            queryFriendHome(task.userId, fromAct)
+        }
+    }
+
+    private fun recheckWaitingBubblesAfterFailedCollect(
+        task: EnergyWaitingManager.WaitingTask,
+        userName: String?,
+        failedBubbleIds: Set<Long>
+    ): String {
+        val latestHome = queryWaitingTargetHome(task)
+            ?: return "服务端标记目标能量球收取失败，主页复核失败"
+        val latestUserName = getAndCacheUserName(task.userId, latestHome, task.fromTag)
+            ?: userName
+            ?: task.userName
+        val rebuiltCount = rebuildWaitingTasksAfterFailedCollect(
+            task,
+            latestHome,
+            latestUserName,
+            failedBubbleIds
+        )
+        return if (rebuiltCount > 0) {
+            "服务端标记目标能量球收取失败，已复核并重建${rebuiltCount}个新蹲点任务"
+        } else {
+            "服务端标记目标能量球收取失败，已复核未发现新的可蹲点能量球"
+        }
+    }
+
+    private fun rebuildWaitingTasksAfterFailedCollect(
+        task: EnergyWaitingManager.WaitingTask,
+        userHomeObj: JSONObject,
+        userName: String?,
+        failedBubbleIds: Set<Long>
+    ): Int {
+        val serverTime = userHomeObj.optLong("now", System.currentTimeMillis())
+        val isSelf = task.isSelf()
+        val excludedBubbleIds = failedBubbleIds + task.bubbleId
+        val bubbles = if (isTeam(userHomeObj)) {
+            userHomeObj.optJSONObject("teamHomeResult")
+                ?.optJSONObject("mainMember")
+                ?.optJSONArray("bubbles")
+        } else {
+            userHomeObj.optJSONArray("bubbles")
+        } ?: return 0
+
+        var rebuiltCount = 0
+        for (i in 0 until bubbles.length()) {
+            val bubble = bubbles.optJSONObject(i) ?: continue
+            if (bubble.optString("collectStatus") != CollectStatus.WAITING.name) {
+                continue
+            }
+
+            val bubbleId = bubble.optLong("id", 0L)
+            if (bubbleId <= 0L || bubbleId in excludedBubbleIds) {
+                continue
+            }
+
+            val bubbleCount = bubble.optInt("fullEnergy", 0)
+            if (bubbleCount <= 0) {
+                continue
+            }
+            if (isSelf && !shouldCollectSelfBubble(bubbleCount)) {
+                continue
+            }
+
+            val produceTime = bubble.optLong("produceTime", 0L)
+            if (produceTime <= serverTime) {
+                continue
+            }
+            if (!isSelf && shouldSkipWaitingTaskDueToProtection(userHomeObj, produceTime, serverTime)) {
+                continue
+            }
+            if (EnergyWaitingManager.hasWaitingTask(task.userId, bubbleId, produceTime)) {
+                continue
+            }
+
+            EnergyWaitingManager.addWaitingTask(
+                userId = task.userId,
+                userName = userName ?: task.userName,
+                bubbleId = bubbleId,
+                produceTime = produceTime,
+                fromTag = task.fromTag.ifBlank { "蹲点收取" },
+                userHomeObj = userHomeObj
+            )
+            rebuiltCount++
+        }
+
+        val safeUserName = userName ?: task.userName
+        if (rebuiltCount > 0) {
+            Log.forest("蹲点失败复核[$safeUserName]：跳过 failedBubbleIds=$excludedBubbleIds，已重建${rebuiltCount}个新蹲点任务")
+        } else {
+            Log.forest("蹲点失败复核[$safeUserName]：跳过 failedBubbleIds=$excludedBubbleIds，未发现新的可蹲点能量球")
+        }
+        return rebuiltCount
+    }
+
     /**
      * 实现EnergyCollectCallback接口
      * 为蹲点管理器提供能量收取功能（增强版）
@@ -9245,13 +9426,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         }
         return try {
             withContext(Dispatchers.Default) {
-                // 主号蹲点查询自己的主页，好友蹲点走好友主页守卫。
-                val fromAct = if (task.isPkContest()) "PKContest" else "TAKE_LOOK_FRIEND"
-                val friendHomeObj = if (task.isSelf()) {
-                    querySelfHome()
-                } else {
-                    queryFriendHome(task.userId, fromAct)
-                }
+                val friendHomeObj = queryWaitingTargetHome(task)
                 if (friendHomeObj != null) {
                     // 获取真实用户名
                     val realUserName = getAndCacheUserName(task.userId, friendHomeObj, task.fromTag)
@@ -9266,7 +9441,12 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                             Log.printStackTrace(TAG, "蹲点后领取N倍卡能量失败", it)
                         }
                     }
-                    result.copy(userName = realUserName)
+                    val finalMessage = if (result.allRequestedBubblesFailed) {
+                        recheckWaitingBubblesAfterFailedCollect(task, realUserName, result.failedBubbleIds)
+                    } else {
+                        result.message
+                    }
+                    result.copy(userName = realUserName, message = finalMessage)
                 } else {
                     CollectResult(
                         success = false,
