@@ -6,13 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: 'Force build even if no new upstream commits'
+        description: '即使上游无更新也强制构建'
         type: boolean
         required: false
         default: false
   push:
     branches:
       - dev
+    paths-ignore:
+      - '**.md'
+      - '.github/**'
 
 permissions:
   contents: write
@@ -28,17 +31,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
 
       - name: Setup Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Configure push token
-        run: |
-          if [ -n "${{ secrets.GH_PAT }}" ]; then
-            git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git"
-          fi
 
       - name: Add upstream remote
         run: |
@@ -53,59 +51,64 @@ jobs:
           echo "upstream_head=${UPSTREAM_HEAD}" >> $GITHUB_OUTPUT
           echo "local_head=${LOCAL_HEAD}" >> $GITHUB_OUTPUT
 
-          FORCE="${{ github.event_name == 'workflow_dispatch' && inputs.force || 'false' }}"
+          FORCE="${{ github.event.inputs.force || 'false' }}"
 
           if [ "$FORCE" = "true" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            NEW_COUNT=$(git rev-list --count ${LOCAL_HEAD}..${UPSTREAM_HEAD})
+            NEW_COUNT=$(git rev-list --count ${LOCAL_HEAD}..${UPSTREAM_HEAD} 2>/dev/null || echo 0)
             echo "commit_count=${NEW_COUNT}" >> $GITHUB_OUTPUT
-            echo "Force build enabled"
+            echo "::notice::Force build enabled"
+          elif [ "${UPSTREAM_HEAD}" = "${LOCAL_HEAD}" ]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "::notice::Already up to date with upstream"
           elif git merge-base --is-ancestor ${UPSTREAM_HEAD} ${LOCAL_HEAD} 2>/dev/null; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No new upstream commits"
+            echo "::notice::Local is ahead of upstream, no new upstream commits"
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
             NEW_COUNT=$(git rev-list --count ${LOCAL_HEAD}..${UPSTREAM_HEAD})
             echo "commit_count=${NEW_COUNT}" >> $GITHUB_OUTPUT
-            echo "Detected ${NEW_COUNT} new upstream commits"
+            echo "::notice::Detected ${NEW_COUNT} new upstream commits"
           fi
 
       - name: Collect upstream commit log
         if: steps.check.outputs.has_changes == 'true'
-        id: commit_log
         run: |
-          git log --format="%s" --no-merges upstream/dev -6 > /tmp/commit_log.txt
-          echo "log_file=/tmp/commit_log.txt" >> $GITHUB_OUTPUT
+          git log --format="%h %s" --no-merges upstream/dev -6 > /tmp/commit_log.txt
+          cat /tmp/commit_log.txt
 
       - name: Extract APK version
         if: steps.check.outputs.has_changes == 'true'
         id: version
         run: |
-          APK_VERSION=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
+          APK_VERSION=$(grep '^appVersion=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
           echo "apk_version=${APK_VERSION}" >> $GITHUB_OUTPUT
+          echo "App version: ${APK_VERSION}"
 
-      - name: Collect sync info
-        if: steps.check.outputs.has_changes == 'true'
-        id: sync_info
-        run: |
-          SYNC_TIME=$(date '+%Y-%m-%d %H:%M:%S UTC')
-          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
-          echo "sync_time=${SYNC_TIME}" >> $GITHUB_OUTPUT
-
-      - name: Fetch upstream diff summary
+      - name: Show upstream diff summary
         if: steps.check.outputs.has_changes == 'true'
         run: |
-          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
           LOCAL_HEAD="${{ steps.check.outputs.local_head }}"
+          UPSTREAM_HEAD="${{ steps.check.outputs.upstream_head }}"
+          echo "=== Files changed ==="
           git diff --stat ${LOCAL_HEAD}..${UPSTREAM_HEAD} | head -30
 
       - name: Merge upstream changes
         if: steps.check.outputs.has_changes == 'true'
+        id: merge
         run: |
-          git merge upstream/dev --ff-only -m "sync: merge upstream dev branch [skip ci]"
+          if git merge upstream/dev --ff-only -m "sync: merge upstream/dev [skip ci]"; then
+            echo "merged=true" >> $GITHUB_OUTPUT
+            echo "::notice::Fast-forward merge succeeded"
+          else
+            echo "::warning::Fast-forward merge failed, trying regular merge"
+            git merge upstream/dev --no-edit -m "sync: merge upstream/dev [skip ci]"
+            echo "merged=true" >> $GITHUB_OUTPUT
+            echo "::notice::Regular merge succeeded"
+          fi
 
       - name: Push to target repo
-        if: steps.check.outputs.has_changes == 'true'
+        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merged == 'true'
         run: |
           git push origin dev
 
@@ -124,24 +127,17 @@ jobs:
 
       - name: Cache Gradle
         if: steps.check.outputs.has_changes == 'true'
-        uses: actions/cache@v4
+        uses: gradle/actions/setup-gradle@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: Make gradlew executable
-        if: steps.check.outputs.has_changes == 'true'
-        run: chmod +x ./gradlew
+          cache-read-only: false
+          gradle-version: wrapper
 
       - name: Build Release APK
         if: steps.check.outputs.has_changes == 'true'
         env:
           CI: 'true'
         run: |
+          chmod +x ./gradlew
           ./gradlew --no-daemon --stacktrace :app:assembleRelease
 
       - name: Collect build info
@@ -150,85 +146,23 @@ jobs:
         run: |
           COMMIT_COUNT="${{ steps.check.outputs.commit_count }}"
           COMMIT_SHA=$(git rev-parse --short HEAD)
-          BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          BUILD_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
           echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
           echo "commit_count=${COMMIT_COUNT}" >> $GITHUB_OUTPUT
           echo "build_time=${BUILD_TIME}" >> $GITHUB_OUTPUT
+          echo "Build: ${COMMIT_SHA}, ${COMMIT_COUNT} commits"
 
       - name: Upload APK artifact
         if: steps.check.outputs.has_changes == 'true'
-        id: upload_apk
         uses: actions/upload-artifact@v4
         with:
-          name: Sesame-AG-APK-${{ steps.build_info.outputs.commit_sha }}
+          name: Sesame-AG-${{ steps.build_info.outputs.commit_sha }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
 
-      - name: Prepare email script
-        if: steps.check.outputs.has_changes == 'true'
-        run: |
-          cat > /tmp/send_email.py << 'PYEOF'
-          import smtplib, os, locale
-          from email.mime.text import MIMEText
-          from datetime import timezone, timedelta
-
-          commit_count = os.environ['COMMIT_COUNT']
-          commit_sha = os.environ['COMMIT_SHA']
-          build_time = os.environ['BUILD_TIME']
-          sync_time = os.environ.get('SYNC_TIME', build_time)
-          apk_version = os.environ.get('APK_VERSION', '0.0.0')
-          workflow_url = os.environ['WORKFLOW_URL']
-
-          run_id = workflow_url.split('/')[-1]
-          artifact_name = f'Sesame-AG-APK-{commit_sha}'
-          download_url = f'https://nightly.link/zhaolongwudi/Sesame-AG/actions/runs/{run_id}/{artifact_name}.zip'
-
-          with open('/tmp/commit_log.txt') as f:
-              commit_log = f.read().strip()
-
-          body = '\n'.join([
-              'Sesame-AG 自动构建通知',
-              '========================',
-              '',
-              '版本号: v' + apk_version + ' (' + commit_sha + ')',
-              '更新提交: ' + commit_count + ' 条',
-              '',
-              '近6次更新优化:',
-              '----------------------------------------',
-              commit_log,
-              '----------------------------------------',
-              '',
-              '构建时间: ' + build_time,
-              '同步时间: ' + sync_time,
-              '',
-              '下载链接:',
-              download_url,
-              '',
-              '同步信息:',
-              '  上游仓库: Sesame-AG/Sesame-AG (dev)',
-              '  目标仓库: zhaolongwudi/Sesame-AG (dev)',
-              '',
-              'GitHub Actions: ' + workflow_url,
-          ])
-
-          msg = MIMEText(body, 'plain', 'utf-8')
-          msg['From'] = os.environ['FROM_EMAIL']
-          msg['To'] = os.environ['TO_EMAIL']
-          msg['Subject'] = '[Sesame-AG] 新构建 - ' + commit_count + ' 条提交 - ' + commit_sha
-
-          server = smtplib.SMTP_SSL(
-              os.environ['SMTP_SERVER'],
-              int(os.environ['SMTP_PORT']),
-              timeout=30
-          )
-          server.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
-          server.sendmail(os.environ['FROM_EMAIL'], os.environ['TO_EMAIL'], msg.as_string())
-          server.quit()
-          print('Email sent successfully')
-          PYEOF
-
       - name: Send email notification
         if: steps.check.outputs.has_changes == 'true'
+        continue-on-error: true
         env:
           SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
@@ -239,25 +173,99 @@ jobs:
           COMMIT_COUNT: ${{ steps.build_info.outputs.commit_count }}
           COMMIT_SHA: ${{ steps.build_info.outputs.commit_sha }}
           BUILD_TIME: ${{ steps.build_info.outputs.build_time }}
-          SYNC_TIME: ${{ steps.sync_info.outputs.sync_time }}
           APK_VERSION: ${{ steps.version.outputs.apk_version }}
           WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python3 /tmp/send_email.py
+          python3 - "$@" << 'PYEOF'
+          import smtplib, os, sys
+          from email.mime.text import MIMEText
+
+          commit_count = os.environ['COMMIT_COUNT']
+          commit_sha = os.environ['COMMIT_SHA']
+          build_time = os.environ.get('BUILD_TIME', 'unknown')
+          apk_version = os.environ.get('APK_VERSION', '0.0.0')
+          workflow_url = os.environ['WORKFLOW_URL']
+
+          if not os.environ.get('SMTP_SERVER'):
+              print('SMTP_SERVER not configured, skipping email')
+              sys.exit(0)
+
+          run_id = workflow_url.rstrip('/').split('/')[-1]
+          artifact_name = f'Sesame-AG-{commit_sha}'
+          download_url = f'https://nightly.link/zhaolongwudi/Sesame-AG/actions/runs/{run_id}/{artifact_name}.zip'
+
+          try:
+              with open('/tmp/commit_log.txt') as f:
+                  commit_log = f.read().strip()
+          except Exception:
+              commit_log = '(unavailable)'
+
+          body = '\n'.join([
+              'Sesame-AG 自动构建通知',
+              '========================',
+              '',
+              f'版本号: v{apk_version} ({commit_sha})',
+              f'更新提交: {commit_count} 条',
+              '',
+              '近6次更新:',
+              '----------------------------------------',
+              commit_log,
+              '----------------------------------------',
+              '',
+              f'构建时间: {build_time}',
+              '',
+              f'下载链接: {download_url}',
+              '',
+              f'GitHub Actions: {workflow_url}',
+          ])
+
+          msg = MIMEText(body, 'plain', 'utf-8')
+          msg['From'] = os.environ['FROM_EMAIL']
+          msg['To'] = os.environ['TO_EMAIL']
+          msg['Subject'] = f'[Sesame-AG] 新构建 - {commit_count} 条提交 - {commit_sha}'
+
+          try:
+              server = smtplib.SMTP_SSL(
+                  os.environ['SMTP_SERVER'],
+                  int(os.environ.get('SMTP_PORT', '465')),
+                  timeout=30
+              )
+              server.login(os.environ['SMTP_USER'], os.environ['SMTP_PASS'])
+              server.sendmail(
+                  os.environ['FROM_EMAIL'],
+                  os.environ['TO_EMAIL'],
+                  msg.as_string()
+              )
+              server.quit()
+              print(f'Email sent to {os.environ["TO_EMAIL"]}')
+          except Exception as e:
+              print(f'Email failed: {e}', file=sys.stderr)
+              sys.exit(0)
+          PYEOF
 
       - name: Summary
+        if: always()
         run: |
           if [ "${{ steps.check.outputs.has_changes }}" = "true" ]; then
-            echo "## Build Completed - ${{ steps.build_info.outputs.commit_count }} new commits" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat /tmp/commit_log.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "- SHA: ${{ steps.build_info.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Time: ${{ steps.build_info.outputs.build_time }}" >> $GITHUB_STEP_SUMMARY
-            echo "- [Download APK](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "## Build Completed - ${{ steps.build_info.outputs.commit_count }} new commits"
+              echo ""
+              echo "| 项目 | 值 |"
+              echo "|------|-----|"
+              echo "| 版本号 | v${{ steps.version.outputs.apk_version }}"
+              echo "| Commit | ${{ steps.build_info.outputs.commit_sha }}"
+              echo "| 时间 | ${{ steps.build_info.outputs.build_time }}"
+              echo ""
+              echo "### 更新内容"
+              echo '```'
+              cat /tmp/commit_log.txt
+              echo '```'
+              echo ""
+              echo "[下载 APK](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            } >> $GITHUB_STEP_SUMMARY
           else
-            echo "## No Changes" >> $GITHUB_STEP_SUMMARY
-            echo "Upstream is up to date." >> $GITHUB_STEP_SUMMARY
+            {
+              echo "## No Changes"
+              echo "Upstream is up to date."
+            } >> $GITHUB_STEP_SUMMARY
           fi
