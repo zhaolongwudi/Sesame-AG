@@ -710,8 +710,8 @@ class AntFarm : ModelTask() {
             BooleanModelField(
                 "receiveDonationCompetitionAward",
                 "捐蛋排位赛 | 领取我的奖励",
-                true
-            ).withDesc("每轮结算后自动领取【我的奖励】中的普通美食、装扮币和段位装扮等奖励。需开启“捐蛋排位赛 | 开启”。").also {
+                false
+            ).withDesc("开启后，每轮结算自动领取【我的奖励】中的普通美食、装扮币和段位装扮等奖励。需开启“捐蛋排位赛 | 开启”。").also {
                 receiveDonationCompetitionAward = it
             })
         modelFields.addField(

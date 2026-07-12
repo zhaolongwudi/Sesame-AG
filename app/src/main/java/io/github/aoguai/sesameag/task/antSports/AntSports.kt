@@ -499,13 +499,13 @@ class AntSports : ModelTask() {
             ).also { neverlandGrid = it }
         )
         modelFields.addField(
-            BooleanModelField("neverlandAutoReward", "健康岛 | 自动领奖", true).withDesc(
-                "新游戏模式岛屿完成后自动选择奖励；明确非重试错误会记录并尝试下一个奖励。"
+            BooleanModelField("neverlandAutoReward", "健康岛 | 自动领奖", false).withDesc(
+                "开启后在新游戏模式岛屿完成时自动选择奖励；明确非重试错误会记录并尝试下一个奖励。"
             ).also { neverlandAutoReward = it }
         )
         modelFields.addField(
-            BooleanModelField("neverlandPreferMedal", "健康岛 | 优先奖牌", true).withDesc(
-                "健康岛自动领奖时优先选择名称包含“奖牌”的奖励，否则选择服务端返回的首个奖励。"
+            BooleanModelField("neverlandPreferMedal", "健康岛 | 优先奖牌", false).withDesc(
+                "开启后，健康岛自动领奖时优先选择名称包含“奖牌”的奖励，否则选择服务端返回的首个奖励。需开启“健康岛 | 自动领奖”。"
             ).also { neverlandPreferMedal = it }
         )
         modelFields.addField(
