@@ -270,6 +270,13 @@ class AntSports : ModelTask() {
         val themeId: String? = null
     )
 
+    private data class RouteKnowledgeEntry(
+        val knowledgeId: String,
+        val pathId: String,
+        val name: String,
+        val status: String
+    )
+
     private data class RouteDecision(
         val candidate: RouteCandidate,
         val reason: String
@@ -3896,10 +3903,14 @@ class AntSports : ModelTask() {
                 continue
             }
             val cityPathData = queryCityPath(city.cityId) ?: continue
-            val pathList = cityPathData.optJSONArray("cityPathList") ?: continue
-            var hasRouteInCity = false
-            var loopCandidate: RouteCandidate? = null
-            var excludedLoopCandidate: RouteCandidate? = null
+            val pathList = cityPathData.optJSONArray("cityPathList")
+            if (pathList == null) {
+                Log.sports(
+                    "行走路线🚶🏻‍♂️城市见闻未完成但当前城市路线列表为空[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]，跳过城市"
+                )
+                continue
+            }
+            val candidatesByPathId = LinkedHashMap<String, RouteCandidate>()
             for (j in 0 until pathList.length()) {
                 val cityPath = pathList.optJSONObject(j) ?: continue
                 val candidate = RouteCandidate(
@@ -3911,57 +3922,145 @@ class AntSports : ModelTask() {
                     cityId = city.cityId,
                     status = cityPath.optString("pathCompleteStatus", "")
                 )
-                if (candidate.pathId.isBlank()) {
-                    continue
+                if (candidate.pathId.isNotBlank()) {
+                    candidatesByPathId.putIfAbsent(candidate.pathId, candidate)
                 }
-                hasRouteInCity = true
-                val isExcluded = (!excludePathId.isNullOrBlank() && candidate.pathId == excludePathId) ||
+            }
+            if (candidatesByPathId.isEmpty()) {
+                Log.sports(
+                    "行走路线🚶🏻‍♂️城市见闻未完成但当前城市无可用路线[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]，跳过城市"
+                )
+                continue
+            }
+
+            val isExcluded: (RouteCandidate) -> Boolean = { candidate ->
+                (!excludePathId.isNullOrBlank() && candidate.pathId == excludePathId) ||
                     (!excludePathName.isNullOrBlank() &&
                         candidate.name.isNotBlank() &&
                         candidate.name == excludePathName)
-                if (!isExcluded && !isRouteCompleted(candidate.status)) {
+            }
+            val knowledgeEntries = queryRouteKnowledgeEntries(city.cityId)
+            if (knowledgeEntries != null) {
+                val pendingKnowledge = knowledgeEntries.filter {
+                    it.status.equals("NOT_RECEIVE", ignoreCase = true)
+                }
+                if (pendingKnowledge.isEmpty()) {
                     Log.sports(
-                        "行走路线📍城市见闻优先[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total} status=${city.status.ifBlank { "UNKNOWN" }}]" +
-                            " -> [${candidate.name.ifBlank { candidate.pathId }}]"
+                        "行走路线🚶🏻‍♂️城市见闻跳过[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#勋章未完成但详情未返回待收碎片"
                     )
-                    return RouteDecision(
-                        candidate,
-                        "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]"
+                    continue
+                }
+
+                val unavailableKnowledge = pendingKnowledge.filter {
+                    it.pathId.isBlank() || !candidatesByPathId.containsKey(it.pathId)
+                }
+                if (unavailableKnowledge.isNotEmpty()) {
+                    val skipped = unavailableKnowledge.joinToString("、") { knowledge ->
+                        "${knowledge.name.ifBlank { knowledge.knowledgeId.ifBlank { "无名称" } }}(pathId=${knowledge.pathId.ifBlank { "无pathId" }})"
+                    }
+                    Log.sports(
+                        "行走路线📍城市见闻跳过失效碎片[${city.cityName.ifBlank { city.cityId }}]#当前路线列表未返回:$skipped"
                     )
                 }
-                if (!isExcluded && loopCandidate == null) {
-                    loopCandidate = candidate
+
+                val availableKnowledgeRoutes = pendingKnowledge.mapNotNull { knowledge ->
+                    candidatesByPathId[knowledge.pathId]?.let { knowledge to it }
                 }
-                if (isExcluded && excludedLoopCandidate == null) {
-                    excludedLoopCandidate = candidate
+                if (availableKnowledgeRoutes.isEmpty()) {
+                    Log.sports(
+                        "行走路线🚶🏻‍♂️城市见闻跳过[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#所有待收碎片对应路线已下线或不存在"
+                    )
+                    continue
                 }
-            }
-            if (loopCandidate != null) {
+
+                val selected = availableKnowledgeRoutes.firstOrNull { (_, candidate) ->
+                    !isExcluded(candidate) && !isRouteCompleted(candidate.status)
+                } ?: availableKnowledgeRoutes.firstOrNull { (_, candidate) ->
+                    !isExcluded(candidate)
+                } ?: availableKnowledgeRoutes.first()
+                val knowledge = selected.first
+                val candidate = selected.second
                 Log.sports(
                     "行走路线📍城市见闻优先[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total} status=${city.status.ifBlank { "UNKNOWN" }}]" +
-                        " -> [${loopCandidate.name.ifBlank { loopCandidate.pathId }}]#循环"
+                        " -> [${candidate.name.ifBlank { candidate.pathId }}]#待收见闻[${knowledge.name.ifBlank { knowledge.knowledgeId }}]"
                 )
                 return RouteDecision(
-                    loopCandidate,
-                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#优先循环路线"
+                    candidate,
+                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#待收见闻[${knowledge.name.ifBlank { knowledge.knowledgeId }}]"
                 )
             }
-            if (excludedLoopCandidate != null) {
+
+            val candidates = candidatesByPathId.values.toList()
+            candidates.firstOrNull { !isExcluded(it) && !isRouteCompleted(it.status) }?.let { candidate ->
                 Log.sports(
-                    "行走路线📍城市见闻优先[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total} status=${city.status.ifBlank { "UNKNOWN" }}]" +
-                        " -> [${excludedLoopCandidate.name.ifBlank { excludedLoopCandidate.pathId }}]#当前路线"
+                    "行走路线📍城市见闻详情查询失败，回退路线扫描[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]" +
+                        " -> [${candidate.name.ifBlank { candidate.pathId }}]"
                 )
                 return RouteDecision(
-                    excludedLoopCandidate,
-                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#仅当前路线可循环"
+                    candidate,
+                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#详情查询失败回退"
                 )
             }
-            if (hasRouteInCity) {
-                Log.sports("行走路线🚶🏻‍♂️城市见闻未完成但无未完成路线可切换[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]"
+            candidates.firstOrNull { !isExcluded(it) }?.let { candidate ->
+                Log.sports(
+                    "行走路线📍城市见闻详情查询失败，回退循环路线[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]" +
+                        " -> [${candidate.name.ifBlank { candidate.pathId }}]"
+                )
+                return RouteDecision(
+                    candidate,
+                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#详情查询失败回退循环路线"
+                )
+            }
+            candidates.firstOrNull()?.let { candidate ->
+                Log.sports(
+                    "行走路线📍城市见闻详情查询失败，仅当前路线可循环[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]" +
+                        " -> [${candidate.name.ifBlank { candidate.pathId }}]"
+                )
+                return RouteDecision(
+                    candidate,
+                    "城市见闻未完成[${city.cityName.ifBlank { city.cityId }}:${city.received}/${city.total}]#详情查询失败仅当前路线可循环"
                 )
             }
         }
         return null
+    }
+
+    private fun queryRouteKnowledgeEntries(cityId: String): List<RouteKnowledgeEntry>? {
+        return try {
+            val response = JSONObject(AntSportsRpcCall.queryCityKnowledgeDetail(cityId))
+            if (!isSportsRpcSuccess(response)) {
+                Log.error(
+                    TAG,
+                    "行走路线🚶🏻‍♂️查询城市见闻详情失败[cityId=$cityId][code=${extractSportsRpcErrorCode(response).ifEmpty { "UNKNOWN" }}][msg=${extractSportsRpcErrorMessage(response)}] raw=$response"
+                )
+                null
+            } else {
+                val knowledgeList = unwrapSportsRpcPayload(response)
+                    .optJSONObject("data")
+                    ?.optJSONArray("cityKnowledgeList")
+                if (knowledgeList == null) {
+                    Log.error(TAG, "行走路线🚶🏻‍♂️查询城市见闻详情成功但 cityKnowledgeList 为空[cityId=$cityId] raw=$response")
+                    null
+                } else {
+                    buildList {
+                        for (i in 0 until knowledgeList.length()) {
+                            val knowledge = knowledgeList.optJSONObject(i) ?: continue
+                            add(
+                                RouteKnowledgeEntry(
+                                    knowledgeId = knowledge.optString("knowledgeId", ""),
+                                    pathId = knowledge.optString("pathId", ""),
+                                    name = knowledge.optString("name", ""),
+                                    status = knowledge.optString("status", "")
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "queryRouteKnowledgeEntries err", t)
+            null
+        }
     }
 
     private fun queryRouteKnowledgeCities(): List<RouteKnowledgeCity> {
