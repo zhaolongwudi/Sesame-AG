@@ -108,7 +108,6 @@ private val orchardDefaultBlacklist = setOf(
     "ORCHARD_NORMAL_DIAOYU1",           // 钓鱼1次
     "ZHUFANG3IN1",                      // 添加农场小组件并访问
     "70000|逛好物最高得1500肥料",          // XLight广告流量风控，缺少稳定自动闭环
-    "12172|逛浙江农货得肥料",             // 任务全局配置不存在
     "12173",                            // 买好货
     "TOUTIAO|逛一逛今日头条",            // 精确匹配旧今日头条任务，避免误伤趣头条任务
     "ORCHARD_NORMAL_ZADAN10_3000",      // 砸蛋10次得3000肥料
