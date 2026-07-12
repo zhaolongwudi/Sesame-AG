@@ -14,6 +14,7 @@ import io.github.aoguai.sesameag.hook.HookReadyChecker
 import io.github.aoguai.sesameag.hook.keepalive.PersistentLaunchPolicy
 import io.github.aoguai.sesameag.hook.keepalive.PersistentScheduleDefaults
 import io.github.aoguai.sesameag.hook.keepalive.PersistentScheduleKind
+import io.github.aoguai.sesameag.hook.keepalive.PersistentScheduleRegistry
 import io.github.aoguai.sesameag.hook.keepalive.UnifiedScheduler
 import io.github.aoguai.sesameag.model.BaseModel
 import io.github.aoguai.sesameag.model.ModelFields
@@ -1183,7 +1184,13 @@ class AntSports : ModelTask() {
         UnifiedScheduler.cancelPersistentByDedupeKey(ApplicationHook.appContext, persistentSportsDedupeKey(childId))
     }
 
-    internal fun triggerPersistentChildTask(childId: String, group: String, payloadJson: String, source: String): Boolean {
+    internal fun triggerPersistentChildTask(
+        childId: String,
+        group: String,
+        payloadJson: String,
+        source: String,
+        scheduleId: String,
+    ): Boolean {
         val payload = runCatching { JSONObject(payloadJson.ifBlank { "{}" }) }.getOrDefault(JSONObject())
         val ownerUserId = payload.optString("owner_user_id").trim()
         val payloadSessionEpoch = payload.optLong("session_epoch", 0L)
@@ -1201,7 +1208,28 @@ class AntSports : ModelTask() {
             return true
         }
         GlobalThreadPools.execute {
-            runPersistentChildTask(childId, group, payload, source, currentOwnerUserId.orEmpty(), payloadSessionEpoch)
+            PersistentScheduleRegistry.markRunning(scheduleId)
+            val executionLease = ApplicationHook.appContext?.let { context ->
+                WakeLockManager.acquire(
+                    context = context,
+                    timeoutMs = PersistentScheduleDefaults.TASK_EXECUTION_WAKELOCK_MS,
+                    source = "sports_persistent_child",
+                    scheduleId = scheduleId,
+                )
+            }
+            try {
+                runPersistentChildTask(childId, group, payload, source, currentOwnerUserId.orEmpty(), payloadSessionEpoch)
+                PersistentScheduleRegistry.markFired(ApplicationHook.appContext, scheduleId)
+            } catch (t: Throwable) {
+                Log.printStackTrace(TAG, "运动持久子任务执行失败[$group][$childId]", t)
+                PersistentScheduleRegistry.markFailed(
+                    ApplicationHook.appContext,
+                    scheduleId,
+                    t.message ?: t.javaClass.name,
+                )
+            } finally {
+                executionLease?.close()
+            }
         }
         return true
     }
@@ -1220,20 +1248,15 @@ class AntSports : ModelTask() {
         ownerUserId: String,
         sessionEpoch: Long
     ) {
-        try {
-            if (!isPersistentChildSessionCurrent(ownerUserId, sessionEpoch)) {
-                Log.sports("运动持久子任务[$group][$childId]会话已切换，取消执行: owner=$ownerUserId session=$sessionEpoch")
-                return
-            }
-            Log.sports("运动持久子任务触发[$group][$childId] source=$source")
-            cancelPersistentChildTask(childId)
-            when (group) {
-                "syncStep" -> runPersistentSyncStepTask(childId)
-                "BX" -> runTreasureBoxPersistentTask(childId, payload)
-                else -> Log.sports("未知运动持久子任务[$group][$childId]，跳过")
-            }
-        } catch (t: Throwable) {
-            Log.printStackTrace(TAG, "运动持久子任务执行失败[$group][$childId]", t)
+        if (!isPersistentChildSessionCurrent(ownerUserId, sessionEpoch)) {
+            Log.sports("运动持久子任务[$group][$childId]会话已切换，取消执行: owner=$ownerUserId session=$sessionEpoch")
+            return
+        }
+        Log.sports("运动持久子任务触发[$group][$childId] source=$source")
+        when (group) {
+            "syncStep" -> runPersistentSyncStepTask(childId)
+            "BX" -> runTreasureBoxPersistentTask(childId, payload)
+            else -> Log.sports("未知运动持久子任务[$group][$childId]，跳过")
         }
     }
 
