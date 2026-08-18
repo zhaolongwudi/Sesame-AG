@@ -22,7 +22,6 @@ import org.json.JSONObject
 
 object ScheduledTaskRouter {
     private const val TAG = "ScheduledTaskRouter"
-    private const val REOPEN_AT_PREFIX = "persistentScheduleReopenAt::"
     private const val REOPEN_FAILURE_COUNT_PREFIX = "persistentScheduleReopenFailureCount::"
     private const val REOPEN_FAILURE_AT_PREFIX = "persistentScheduleReopenFailureAt::"
     internal const val EXTRA_PERSISTENT_KIND = "persistent_schedule_kind"
@@ -515,22 +514,9 @@ object ScheduledTaskRouter {
             Log.record(TAG, "目标应用已在前台，跳过重复拉起[${schedule.name}]")
             return false
         }
-        if (!consumeLaunchQuota(schedule)) {
-            Log.record(TAG, "持久任务拉起目标应用被频控[${schedule.name}]")
-            return false
-        }
-        val launched =
-            SystemWakeScheduler.launchTargetNow(
-                context,
-                schedule,
-                allowBackgroundAlways = source == "alarm",
-            )
-        if (launched) {
-            // PendingIntent.send() 只代表请求已发出；只有 Activity 消费 launch extra 后才能确认拉起成功。
-            Log.record(TAG, "持久任务已请求拉起目标应用，等待 Activity 确认[${schedule.name}]")
-            return true
-        }
-        recordLaunchFailure(schedule, RuntimeException("pending_intent_launch_failed"))
+        // 用户偏好：不主动把目标应用从前台拉起，避免干扰正常使用手机。
+        // 任务只在目标应用已在前台时准点执行，或由用户手动打开目标应用后恢复。
+        Log.record(TAG, "目标应用不在前台，按用户偏好不主动拉起[${schedule.name}] source=$source")
         return false
     }
 
@@ -546,21 +532,8 @@ object ScheduledTaskRouter {
         ownerUserId: String?,
         source: String,
     ): Boolean {
-        val schedule =
-            PersistentSchedule(
-                name = source,
-                dedupeKey = "runtime_launch:$source",
-                ownerUserId = ownerUserId,
-            )
-        if (!PersistentLaunchPolicy.isForegroundLaunchEnabled(ownerUserId)) {
-            Log.record(TAG, "运行时前台拉起已关闭[source=$source]")
-            return false
-        }
-        if (!consumeLaunchQuota(schedule)) {
-            Log.record(TAG, "运行时前台拉起被频控[source=$source]")
-            return false
-        }
-        return true
+        Log.record(TAG, "按用户偏好禁止运行时前台拉起目标应用[source=$source]")
+        return false
     }
 
     fun recordRuntimeForegroundLaunchFailure(
@@ -576,48 +549,6 @@ object ScheduledTaskRouter {
             ),
             error,
         )
-    }
-
-    private fun consumeLaunchQuota(schedule: PersistentSchedule): Boolean {
-        val key = REOPEN_AT_PREFIX + schedule.dedupeKey.ifBlank { schedule.id }
-        val now = System.currentTimeMillis()
-        if (isInFailureCooldown(schedule, now)) {
-            return false
-        }
-        val last =
-            runCatching { DataStore.get(key, Long::class.javaObjectType) ?: 0L }
-                .getOrDefault(0L)
-        if (last > 0L && now - last < PersistentScheduleDefaults.REOPEN_COOLDOWN_MS) {
-            return false
-        }
-        runCatching { DataStore.put(key, now) }
-        return true
-    }
-
-    private fun isInFailureCooldown(
-        schedule: PersistentSchedule,
-        now: Long,
-    ): Boolean {
-        val key = schedule.dedupeKey.ifBlank { schedule.id }
-        val failureCount =
-            runCatching {
-                DataStore.get(REOPEN_FAILURE_COUNT_PREFIX + key, Int::class.javaObjectType) ?: 0
-            }.getOrDefault(0)
-        if (failureCount < PersistentScheduleDefaults.REOPEN_FAILURE_THRESHOLD) {
-            return false
-        }
-        val failureAt =
-            runCatching {
-                DataStore.get(REOPEN_FAILURE_AT_PREFIX + key, Long::class.javaObjectType) ?: 0L
-            }.getOrDefault(0L)
-        if (failureAt <= 0L) return false
-        val cooldownElapsed = now - failureAt >= PersistentScheduleDefaults.REOPEN_FAILURE_COOLDOWN_MS
-        if (cooldownElapsed) {
-            clearLaunchFailures(schedule)
-            return false
-        }
-        Log.record(TAG, "持久任务拉起目标应用处于失败冷却[${schedule.name}] count=$failureCount")
-        return true
     }
 
     private fun recordLaunchFailure(

@@ -201,50 +201,28 @@ object SystemWakeScheduler {
         primary: PersistentSchedule,
         updateFlag: Int,
     ): PendingIntent? {
+        // 用户偏好：不主动把目标应用从前台拉起。物理闹钟始终走广播接收器，
+        // 由路由决定是否执行，不再通过 PendingIntent.getActivity 直接拉起目标应用。
         val intent =
-            if (context.packageName == General.MODULE_PACKAGE_NAME || !shouldLaunchTarget(primary)) {
-                Intent(context, ScheduledTriggerReceiver::class.java).apply {
-                    action = ACTION_TRIGGER
-                    data =
-                        Uri
-                            .Builder()
-                            .scheme("sesameag")
-                            .authority("persistent-schedule-plan")
-                            .build()
-                    putExtra(EXTRA_SCHEDULE_ID, primary.id)
-                    putExtra(EXTRA_PLANNED_BATCH, true)
-                }
-            } else {
-                buildTargetLaunchIntent(context, primary).apply {
-                    data =
-                        Uri
-                            .Builder()
-                            .scheme("sesameag")
-                            .authority("persistent-schedule-plan-launch")
-                            .build()
-                    putExtra(EXTRA_PLANNED_BATCH, true)
-                }
+            Intent(context, ScheduledTriggerReceiver::class.java).apply {
+                action = ACTION_TRIGGER
+                data =
+                    Uri
+                        .Builder()
+                        .scheme("sesameag")
+                        .authority("persistent-schedule-plan")
+                        .build()
+                putExtra(EXTRA_SCHEDULE_ID, primary.id)
+                putExtra(EXTRA_PLANNED_BATCH, true)
             }
         val flags = updateFlag or PendingIntent.FLAG_IMMUTABLE
         return try {
-            if (context.packageName == General.MODULE_PACKAGE_NAME || !shouldLaunchTarget(primary)) {
-                PendingIntent.getBroadcast(context, PLANNER_REQUEST_CODE, intent, flags)
-            } else {
-                PendingIntent.getActivity(
-                    context,
-                    PLANNER_REQUEST_CODE,
-                    intent,
-                    flags,
-                    creatorLaunchOptions(allowAlways = true),
-                )
-            }
+            PendingIntent.getBroadcast(context, PLANNER_REQUEST_CODE, intent, flags)
         } catch (t: Throwable) {
             Log.printStackTrace(TAG, "创建物理系统闹钟 PendingIntent 失败", t)
             null
         }
     }
-
-    private fun shouldLaunchTarget(schedule: PersistentSchedule): Boolean = PersistentLaunchPolicy.shouldLaunchTarget(schedule)
 
     private fun buildTargetLaunchPendingIntent(
         context: Context,
@@ -324,16 +302,13 @@ object SystemWakeScheduler {
         schedule: PersistentSchedule,
         triggerAtMs: Long,
     ) {
+        // 用户偏好：不主动拉起目标应用前台，物理闹钟只触发广播，无需拉起确认看门狗。
         synchronized(launchConfirmationLock) {
-            val nextScheduleId = schedule.id.takeIf { shouldLaunchTarget(schedule) }
             val previousScheduleId = plannerLaunchScheduleId
-            if (previousScheduleId != null && previousScheduleId != nextScheduleId) {
+            if (previousScheduleId != null) {
                 cancelLaunchConfirmationTimeoutLocked(previousScheduleId)
             }
-            plannerLaunchScheduleId = nextScheduleId
-            if (nextScheduleId != null) {
-                scheduleLaunchConfirmationTimeoutLocked(context, schedule, triggerAtMs)
-            }
+            plannerLaunchScheduleId = null
         }
     }
 
