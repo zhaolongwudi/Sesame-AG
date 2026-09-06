@@ -2,7 +2,7 @@ name: Sync & Build Sesame-AG
 
 on:
   schedule:
-    - cron: '0 0,12 * * *'
+    - cron: '0 1,13 * * *'
   workflow_dispatch:
     inputs:
       force:
