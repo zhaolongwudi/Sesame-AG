@@ -1,7 +1,6 @@
 package io.github.aoguai.sesameag.task.antForest
 
 import android.annotation.SuppressLint
-import io.github.aoguai.sesameag.data.RuntimeInfo
 import io.github.aoguai.sesameag.data.Status
 import io.github.aoguai.sesameag.data.StatusFlags
 import io.github.aoguai.sesameag.data.Statistics
@@ -58,6 +57,7 @@ import io.github.aoguai.sesameag.task.exchange.ExchangeEffectTag
 import io.github.aoguai.sesameag.task.exchange.ExchangeItem
 import io.github.aoguai.sesameag.task.exchange.ExchangeLimit
 import io.github.aoguai.sesameag.task.exchange.ExchangeOptionRow
+import io.github.aoguai.sesameag.task.exchange.ExchangeFetchPacing
 import io.github.aoguai.sesameag.task.exchange.ExchangeOptionsCache
 import io.github.aoguai.sesameag.task.exchange.ExchangeReplenishResult
 import io.github.aoguai.sesameag.task.exchange.ExchangeReplenisher
@@ -71,7 +71,6 @@ import io.github.aoguai.sesameag.util.FriendGuard
 import io.github.aoguai.sesameag.util.GlobalThreadPools
 import io.github.aoguai.sesameag.util.Log
 import io.github.aoguai.sesameag.util.Notify.updateRunningLastExec
-import io.github.aoguai.sesameag.util.Notify.updateRunningStatus
 import io.github.aoguai.sesameag.util.ResChecker
 import io.github.aoguai.sesameag.util.TaskBlacklist
 import io.github.aoguai.sesameag.util.TimeCounter
@@ -851,17 +850,6 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             "任务开始时输出当前森林背包道具清单。"
         ).also { showBagList = it })
         return modelFields
-    }
-
-    override fun check(): Boolean {
-        if (!super.check()) return false
-        val currentTime = System.currentTimeMillis()
-        val forestPauseTime = RuntimeInfo.getInstance().getLong(RuntimeInfo.RuntimeInfoKey.ForestPauseTime)
-        if (forestPauseTime > currentTime) {
-            Log.forest(getName() + "任务-异常等待中，暂不执行检测！")
-            return false
-        }
-        return true
     }
 
     /**
@@ -1759,6 +1747,15 @@ class AntForest : ModelTask(), EnergyCollectCallback {
     }
 
     private fun refreshVitalityExchangeOptionsForSettings(): List<MapperEntity> {
+        val freshRows = ExchangeOptionsCache.loadFreshForSettingsCache(
+            UserMap.currentUid,
+            ExchangeOptionsRefreshBridge.TARGET_FOREST_VITALITY,
+            ExchangeFetchPacing.SETTINGS_FRESH_TTL_MS
+        )
+        if (freshRows.isNotEmpty()) {
+            Log.forest("活力兑换🍃设置页使用新鲜缓存#${freshRows.size}")
+            return freshRows
+        }
         if (!HookReadyChecker.isCurrentProcessReadyForRpc(UserMap.currentUid)) {
             val cachedRows = ExchangeOptionsCache.loadForSettingsCache(
                 UserMap.currentUid,
@@ -1810,6 +1807,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
 
     private fun refreshVitalityExchangeOptionsFromRpc(): List<ExchangeOptionRow> {
         return runCatching {
+            ExchangeFetchPacing.domainStartDelay()
             Vitality.initVitality("")
             val rows = buildVitalityExchangeOptionRows()
             ExchangeOptionsCache.save(UserMap.currentUid, ExchangeOptionsRefreshBridge.TARGET_FOREST_VITALITY, rows)
@@ -3511,9 +3509,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                         if (waitWhenExceptionMs > 0) {
                             val waitTime =
                                 System.currentTimeMillis() + waitWhenExceptionMs
-                            RuntimeInfo.getInstance()
-                                .put(RuntimeInfo.RuntimeInfoKey.ForestPauseTime, waitTime)
-                            updateRunningStatus("异常")
+                            pauseSelfUntil(waitTime)
                             Log.forest("触发异常,等待至" + TimeUtil.getCommonDate(waitTime))
                             errorWait = true
                             return@Runnable
