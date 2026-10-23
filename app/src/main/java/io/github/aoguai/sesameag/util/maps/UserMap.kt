@@ -38,7 +38,6 @@ object UserMap {
     }
 
     @JvmStatic
-    @Synchronized
     fun replace(userId: String, users: Map<String, UserEntity>) {
         userSnapshot = userId to Collections.unmodifiableMap(LinkedHashMap(users))
     }
@@ -55,7 +54,6 @@ object UserMap {
      * 设置当前用户ID
      */
     @JvmStatic
-    @Synchronized
     fun setCurrentUserId(userId: String?) {
         currentUid = if (userId.isNullOrEmpty()) null else userId
     }
@@ -95,9 +93,8 @@ object UserMap {
      * 添加用户到映射
      */
     @JvmStatic
-    @Synchronized
-    fun add(userEntity: UserEntity?) {
-        if (userEntity == null) return
+    fun add(userEntity: UserEntity?): Unit = io.github.aoguai.sesameag.storage.StoreAccess.transaction {
+        if (userEntity == null) return@transaction
         val uid = userEntity.userId
         if (!uid.isNullOrEmpty()) {
             currentUid?.let { replace(it, userMap + (uid to userEntity)) }
@@ -108,8 +105,7 @@ object UserMap {
      * 从映射中移除指定用户
      */
     @JvmStatic
-    @Synchronized
-    fun remove(userId: String?) {
+    fun remove(userId: String?): Unit = io.github.aoguai.sesameag.storage.StoreAccess.transaction {
         if (userId != null) {
             currentUid?.let { replace(it, userMap - userId) }
         }
@@ -123,7 +119,7 @@ object UserMap {
         require(!userId.isNullOrBlank()) { "加载好友失败：账号为空" }
         return Files.withAccountLock(userId) {
             val file = requireNotNull(Files.getFriendIdMapFile(userId))
-            val body = file.readText(Charsets.UTF_8)
+            val body = Files.readText(file)
             val users = linkedMapOf<String, UserEntity>()
             if (body.isNotBlank()) {
                 val dtos = JsonUtil.parseObject(body, object : TypeReference<Map<String, UserEntity.UserDto>>() {})
@@ -142,7 +138,6 @@ object UserMap {
      * 卸载用户数据
      */
     @JvmStatic
-    @Synchronized
     fun unload() {
         userSnapshot = null to emptyMap()
     }
@@ -289,12 +284,11 @@ object UserMap {
     }
 
     @JvmStatic
-    @Synchronized
-    fun updateActiveUser(userEntity: UserEntity?) {
-        val entity = userEntity ?: return
+    fun updateActiveUser(userEntity: UserEntity?): Unit = io.github.aoguai.sesameag.storage.StoreAccess.transaction {
+        val entity = userEntity ?: return@transaction
         val safeUserId = entity.userId?.trim().orEmpty()
-        if (safeUserId.isEmpty()) return
-        if (currentUid != safeUserId) return
+        if (safeUserId.isEmpty()) return@transaction
+        if (currentUid != safeUserId) return@transaction
         replace(safeUserId, userMap + (safeUserId to entity))
         DataStore.put("activedUser", entity)
         Log.record(TAG, "update now active user: $entity")
